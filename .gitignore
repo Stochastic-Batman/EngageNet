@@ -209,3 +209,10 @@ __marimo__/
 # Stochastic-Batman's additions
 data/
 .idea/
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.synctex.gz
+*.toc
