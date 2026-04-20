@@ -107,9 +107,9 @@ This project uses **Python 3.14**. Use the following instructions to set up the 
 ### 1. Create the Virtual Environment
 
 ```bash
-python3.14 -m venv MultiModalSocialAnalysisBehaviour_venv
-source MultiModalSocialAnalysisBehaviour_venv/bin/activate  # Linux/macOS
-.\MultiModalSocialAnalysisBehaviour_venv\Scripts\activate   # Windows
+python3.14 -m venv EngageNet_venv
+source EngageNet_venv/bin/activate  # Linux/macOS
+.\EngageNet_venv\Scripts\activate   # Windows
 ```
 
 ### 2. Install Dependencies
