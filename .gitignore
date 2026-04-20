@@ -216,3 +216,4 @@ data/
 *.snm
 *.synctex.gz
 *.toc
+EngageNet_venv/
