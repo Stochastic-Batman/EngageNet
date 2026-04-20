@@ -128,7 +128,7 @@ pip install numpy pandas matplotlib scipy tqdm torch torchvision torchaudio tran
 │   ├── NoXi/
 │   ├── NoXi+J/
 │   └── MPII/
-├── MultiModalSocialAnalysisBehaviour_venv/  # Python virtual environment
+├── EngageNet_venv/  # Python virtual environment
 ├── src/
 │   └── read_data.py                         # Reading Data
 └── README.md
