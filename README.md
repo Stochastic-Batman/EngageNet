@@ -1,4 +1,4 @@
-# Multi-Modal Social Behaviour Analysis
+# EngageNet
 
 This repository contains the codebase for the **Multi-Modal Social Behaviour Analysis** project at the **Georgian Artificial Intelligence Association (GAIA)**. Under the supervision of **Dr. Philipp Müller** and PhD candidate **Beso Mikaberidze**, our team is exploring behavioral personalization using high-fidelity multi-modal datasets.
 
