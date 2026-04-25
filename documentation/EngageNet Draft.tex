@@ -229,6 +229,72 @@
 	
 	This surgical approach mitigates the \textbf{Variance Starvation Problem (VSP)}. In VSP, a model minimises the Beta NLL by artificially inflating $\mathrm{Var}[y]$ (i.e., reducing the concentration $\kappa = \hat{\alpha}+\hat{\beta}$) on hard samples; the gradient to the mean head then vanishes because the loss term becomes insensitive to prediction error. By freezing the majority of the backbone and updating only the listed surgical layers, we force the model to improve genuine feature alignment rather than using uncertainty as a "slack variable" to bypass difficult data.
 	
+	\section{Permutation-Equivariant Inter-modal Fusion}
+	
+	\subsection{The Order-Sensitivity Problem}
+	
+	Recall from Section 1.2.2 that the inter-modal BiMamba module processes the transposed concatenation
+	$$m = \text{Transpose}(u_1 \circ u_2 \circ \dots \circ u_M) \in \R^{(\sum_{i=1}^{M} C_i') \times L'},$$
+	treating the fused channel axis as a sequence of length $\sum C_i'$, with each modality's channels occupying a contiguous block. The ordering of these blocks - audio before video, or video before pose - is chosen arbitrarily by the practitioner; no prior knowledge assigns a canonical rank to distinct measurement modalities. We show that this arbitrariness introduces a structural bias, because selective state-space models are inherently order-sensitive.
+	
+	Let $\xi_k \in \R^{L'}$ denote the SSM hidden state at sequence position $k$, and let $s_k \in \R^{L'}$ be the input at that position (corresponding to the channel block of the $k$-th modality in $m$). The Mamba selective SSM \cite{gu2023mamba} defines the recurrence
+	$$\xi_k = \bar{A}_k(s_k)\,\xi_{k-1} + \bar{B}_k(s_k)\,s_k, \qquad y_k = C_k(s_k)\,\xi_k,$$
+	where $\xi_0 = \mathbf{0}$ and $\bar{A}_k,\bar{B}_k,C_k$ are input-dependent operators instantiated via the selection mechanism.
+	
+	\textbf{Proposition.} For any SSM with non-trivial state transition (i.e.\ $\bar{A} \neq I$), the output sequence is not invariant under permutations of the input.
+	
+	\textit{Proof.} It suffices to consider $M = 2$ and a linear, non-selective SSM with constant operators $\bar{A}, \bar{B}, C$. Under the ordering $(u_1, u_2)$:
+	$$\xi_1 = \bar{B}\,u_1, \qquad y_2 = C\!\left(\bar{A}\bar{B}\,u_1 + \bar{B}\,u_2\right).$$
+	Under the swapped ordering $(u_2, u_1)$:
+	$$\xi_1' = \bar{B}\,u_2, \qquad y_2' = C\!\left(\bar{A}\bar{B}\,u_2 + \bar{B}\,u_1\right).$$
+	The difference is
+	$$y_2 - y_2' = C\bar{B}(\bar{A} - I)(u_1 - u_2).$$
+	This vanishes for all $u_1 \neq u_2$ only if $\bar{A} = I$, which degenerates the SSM to a memoryless map and eliminates all temporal memory - contradicting the purpose of state-space modelling. In the selective Mamba SSM, the input-dependent operators $\bar{A}_k(s_k)$ and $\bar{B}_k(s_k)$ introduce additional asymmetric cross-terms that further break permutation symmetry. $\square$
+	
+	Bidirectionality alone does not resolve the problem. In the backward pass, $\text{Rev}_t(h^{\leftarrow})$ reverses along the \emph{temporal} axis $L'$, not along the modality-sequence axis $\sum C_i'$. The backward SSM still processes modality blocks in the order $M, M{-}1, \dots, 1$; each modality's backward hidden state therefore accumulates context from those that follow it in the reversed sequence. The averaged representation
+	$$H = \frac{h^{\rightarrow} + \text{Rev}_t(h^{\leftarrow})}{2}$$
+	remains order-dependent: both the forward and backward context seen by modality $i$ change qualitatively with its position in the arbitrary concatenation, so the same physical modality receives a structurally different representation depending solely on where it was placed in $m$.
+	
+	\subsection{Differentiable Modality Ordering via Gumbel-Sinkhorn}
+	
+	We replace the fixed concatenation order with a \emph{learned, input-dependent permutation} computed differentiably via the Gumbel-Sinkhorn operator \cite{mena2018}. The key intuition is that the optimal ordering is itself a function of the data: for a sample in which audio is uninformative, placing it first in the forward SSM pass deposits unreliable context into the hidden states of all subsequent modalities, whereas placing it last confines the contamination to the final position.
+	
+	\paragraph{Uniform channel projection.}
+	Different InitEncoders naturally produce output representations of different widths: for instance, an audio encoder may output $C_{\text{audio}}' = 64$ channels while a video encoder outputs $C_{\text{video}}' = 256$ channels. These \emph{heterogeneous dimensions} prevent treating the modality outputs as interchangeable objects of the same type, which is a prerequisite for learning a permutation over them. To resolve this, a modality-specific affine map $f_i : \R^{C_i'} \to \R^{C'}$, defined by $f_i(v) = W_i^{\text{proj}} v + b_i^{\text{proj}}$ with $W_i^{\text{proj}} \in \R^{C' \times C_i'}$ and $b_i^{\text{proj}} \in \R^{C'}$, is appended to each InitEncoder to linearly project its output into a shared embedding space of dimension $C'$. After this projection, $u_i \in \R^{L' \times C'}$ for all $i \in \{1,\dots,M\}$. The matrix $U$ is then the concatenation of these uniformly-dimensioned representations along the channel axis: $U = u_1 \circ u_2 \circ \dots \circ u_M \in \R^{L' \times MC'}$, where each $u_i$ contributes exactly $C'$ columns.
+	
+	\paragraph{Score matrix.}
+	A \emph{meta-network} $\phi$ is a small auxiliary network whose sole purpose is to predict how modalities should be ordered, operating on top of the main feature representations without participating in the primary task of engagement prediction. Concretely, $\phi$ maps the set $\{u_i\}_{i=1}^M$ to an $M \times M$ assignment \emph{score} matrix $Z \in \R^{M \times M}$, where the entry $Z_{ij}$ quantifies the fitness of placing modality $j$ at sequence position $i$ in the inter-modal BiMamba: a large value of $Z_{ij}$ means the meta-network believes modality $j$ should be processed at step $i$. Each modality representation is first summarised by temporal mean-pooling:
+	$$\bar{u}_i = \frac{1}{L'}\sum_{t=1}^{L'} u_i^{(t)} \in \R^{C'}.$$
+	Two asymmetric projections into a score-embedding space of dimension $d_s$ then produce query and key vectors:
+	$$q_i = W_Q\,\bar{u}_i + b_Q \in \R^{d_s}, \qquad k_j = W_K\,\bar{u}_j + b_K \in \R^{d_s},$$
+	where $W_Q, W_K \in \R^{d_s \times C'}$ and $b_Q, b_K \in \R^{d_s}$ are learnable parameters shared across modalities. The score is then computed as a scaled dot product:
+	$$Z_{ij} = \frac{q_i^\top k_j}{\sqrt{d_s}}.$$
+	The asymmetry of the query-key factorisation is intentional: it allows the model to distinguish between a modality acting as a \emph{context supplier} (the key role) and a modality acting as a \emph{context receiver} (the query role), and assigns independent scores to each direction. A symmetric formulation $Z_{ij} = z_i^\top z_j$ would force $Z = Z^\top$, which in turn constrains the learned permutation matrix $P$ to be symmetric. The only symmetric permutation matrices are \emph{involutions} - permutations that are their own inverse ($\pi = \pi^{-1}$), corresponding to products of disjoint transpositions (swaps). This would unnecessarily halve the space of learnable orderings, excluding, for example, cyclic permutations of three or more modalities.
+	
+	\paragraph{Gumbel perturbation.}
+	The Gumbel-max trick \cite{jang2017} is a technique for sampling from a categorical distribution by adding independent Gumbel-distributed noise to log-probabilities and taking the argmax. Critically, it enables backpropagation through discrete sampling steps by relaxing the argmax to a continuous softmax, acting as a differentiable approximation for optimising over discrete choices. We apply this principle at the level of permutation matrices: to enable stochastic exploration of orderings during training, the score matrix is perturbed with i.i.d.\ standard Gumbel noise and rescaled by temperature $\tau > 0$:
+	$$\tilde{Z}_{ij} = \frac{Z_{ij} + G_{ij}}{\tau}, \qquad G_{ij} = -\ln(-\ln U_{ij}), \quad U_{ij} \overset{\text{i.i.d.}}{\sim} \mathrm{Uniform}(0,1).$$
+	The formula $G_{ij} = -\ln(-\ln U_{ij})$ is the standard inverse-CDF transform for the Gumbel distribution \cite{gumbel1954}. The temperature $\tau$ is annealed from an initial value $\tau_0$ (e.g.\ $\tau_0 = 1.0$) to a small final value $\tau_\infty$ (e.g.\ $\tau_\infty = 0.05$) over the course of training, progressively concentrating probability mass towards a single hard permutation.
+	
+	\paragraph{Sinkhorn normalisation.}
+	The \textbf{Birkhoff-von Neumann theorem} \cite{birkhoff1946} states that the set of doubly-stochastic matrices (square matrices with non-negative real entries in which every row and every column sums to exactly 1) is a convex polytope whose extreme points are precisely the permutation matrices; this polytope is known as the Birkhoff polytope. Any doubly-stochastic matrix can therefore be written as a convex combination of permutation matrices, making it a principled continuous relaxation of a discrete permutation. A \emph{hard permutation} is a matrix $\Pi \in \{0,1\}^{M \times M}$ that is a permutation matrix exactly - one entry equal to 1 per row and per column, all others 0 - representing a deterministic, non-differentiable assignment. A \emph{differentiable relaxation} replaces this with a doubly-stochastic matrix $P \in [0,1]^{M \times M}$ that lives in the interior of the Birkhoff polytope, where gradients are well-defined. Following \cite{mena2018}, we obtain such a $P$ by applying the Sinkhorn-Knopp algorithm to $\exp(\tilde{Z})$:
+	$$P = \text{Sinkhorn}\bigl(\exp(\tilde{Z})\bigr).$$
+	The Sinkhorn-Knopp algorithm alternately normalises the rows and columns of a positive matrix until convergence, and it can be shown that this iteration converges to the unique doubly-stochastic matrix in the same scaling class as $\exp(\tilde{Z})$. Because $\exp(\tilde{Z})$ is elementwise positive and the normalisation steps are differentiable, the gradient $\displaystyle \frac{\partial P}{\partial Z}$ exists and is well-conditioned throughout training, enabling end-to-end learning of the ordering via standard backpropagation.
+	
+	\paragraph{Soft reordering.}
+	With $P$ computed as above, the permuted representation for position $i$ is the $P$-weighted convex combination of all intra-modal outputs. Concretely, the $i$-th row of $P$, denoted $P_{i\cdot} = (P_{i1}, \dots, P_{iM})$, defines a probability distribution over the $M$ modalities; since $P$ is doubly-stochastic, we have $P_{ij} \geq 0$ and $\sum_j P_{ij} = 1$ for every $i$. The soft assignment is then:
+	$$\tilde{u}_i = \sum_{j=1}^{M} P_{ij}\,u_j \in \R^{L' \times C'}, \qquad i \in \{1,\dots,M\}.$$
+	The entry $P_{ij} \in [0,1]$ is the soft probability that modality $j$ is assigned to position $i$ in the inter-modal sequence; when $P$ is close to a hard permutation matrix (as happens after temperature annealing), exactly one $P_{ij}$ per row will be close to 1 and the rest close to 0, recovering a near-discrete assignment. The fixed concatenation $m$ is replaced by
+	$$\tilde{m} = \text{Transpose}(\tilde{u}_1 \circ \tilde{u}_2 \circ \dots \circ \tilde{u}_M) \in \R^{MC' \times L'},$$
+	and the inter-modal BiMamba operates on $\tilde{m}$ instead of $m$; all equations in Section 1.2.2 remain unchanged under this substitution.
+	
+	\paragraph{Inference.}
+	At test time, Gumbel noise is suppressed ($G_{ij} = 0$). If a hard permutation is required (e.g.\ for latency-critical deployment), the optimal discrete assignment is recovered by solving the linear assignment problem over the score matrix $Z$:
+	$$\pi^* = \arg\min_{\pi \in S_M} \sum_{i=1}^{M} \bigl(-Z_{i,\pi(i)}\bigr),$$
+	where $S_M$ denotes the symmetric group - the set of all $M!$ bijections from $\{1,\dots,M\}$ to itself, i.e.\ all possible orderings of the $M$ modalities. This minimisation is solved by applying the Hungarian algorithm to $-Z$ in $O(M^3)$ time, which is negligible for the small modality counts typical in multimodal sensing.
+	
+	\paragraph{Equivariance guarantee.}
+	Let $\rho \in S_M$ be applied to the inputs before the meta-network. Because $Z_{ij}$ is computed from the data via the shared query-key projections, relabelling the inputs by $\rho$ relabels the rows and columns of $Z$ by $\rho$ as well, and consequently the recovered hard permutation transforms as $\pi^*_\rho = \rho \circ \pi^*$. The permuted sequence fed to the inter-modal BiMamba is therefore the same physical ordering of modalities regardless of how the practitioner originally numbered them. Consequently, the fused representation $H = \text{BiMamba}(\tilde{m})$ is invariant to the practitioner's arbitrary choice of concatenation order, provided the model has converged to a stable optimal ordering $\pi^*$.
 	
 	\newpage
 	\begin{thebibliography}{9}
@@ -238,6 +304,21 @@
 		
 		\bibitem{xie2026mhc}
 		Zhenda Xie et al., \emph{mHC: Manifold-Constrained Hyper-Connections}, arXiv preprint arXiv:2512.24880v2 (2026).
+		
+		\bibitem{gu2023mamba}
+		Albert Gu and Tri Dao, \emph{Mamba: Linear-Time Sequence Modeling with Selective State Spaces}, arXiv preprint arXiv:2312.00752 (2024).
+		
+		\bibitem{mena2018}
+		Gonzalo Mena et al., \emph{Learning Latent Permutations with Gumbel-Sinkhorn Networks}, International Conference on Learning Representations (ICLR 2018).
+		
+		\bibitem{jang2017}
+		Eric Jang, Shixiang Gu, and Ben Poole, \emph{Categorical Reparameterization with Gumbel-Softmax}, International Conference on Learning Representations (ICLR 2017).
+		
+		\bibitem{gumbel1954}
+		Emil Julius Gumbel, \emph{Statistical Theory of Extreme Values and Some Practical Applications}, National Bureau of Standards Applied Mathematics Series, 33 (1954).
+		
+		\bibitem{birkhoff1946}
+		Garrett Birkhoff, \emph{Tres observaciones sobre el algebra lineal}, Universidad Nacional de Tucum\'{a}n, Revista, Serie A, 5:147--151 (1946).
 		
 	\end{thebibliography}
 	
