@@ -12,7 +12,7 @@
 	
 	\title{\textbf{EngageNet Draft}}
 	\author{Lado Turmanidze}
-	\date{May 4, 2026}
+	\date{\today}
 	\maketitle
 	
 	\section{Architecture}
@@ -208,9 +208,10 @@
 	\mathcal{L}_{\text{mis}} = \sum_{i=1}^M D_{KL} \bigl( \mathrm{Beta}(\alpha_i, \beta_i) \parallel \mathrm{Beta}(\alpha_{\text{multi}}, \beta_{\text{multi}}) \bigr),
 	$$
 	where the closed-form Beta KL divergence, with $ B_i := B(\alpha_i,\beta_i) $, is:
-	$$
-	D_{KL}(B_1 \parallel B_2) = \ln \frac{B(\alpha_2,\beta_2)}{B(\alpha_1,\beta_1)} + (\alpha_1 - \alpha_2)\psi(\alpha_1) + (\beta_1 - \beta_2)\psi(\beta_1) + (\alpha_2 - \alpha_1 + \beta_2 - \beta_1)\psi(\alpha_1 + \beta_1)
-	$$
+	\begin{equation}
+		\label{eq:beta_kl}
+		D_{\text{KL}}(B_1 \parallel B_2) = \ln \frac{B(\alpha_2,\beta_2)}{B(\alpha_1,\beta_1)} + (\alpha_1 - \alpha_2)\psi(\alpha_1) + (\beta_1 - \beta_2)\psi(\beta_1) + (\alpha_2 - \alpha_1 + \beta_2 - \beta_1)\psi(\alpha_1 + \beta_1)
+	\end{equation}
 	
 	The final TTA loss combines the MIS consistency term with a supervision term that treats the multimodal mean as a pseudo-target for each unimodal head:
 	$$
@@ -228,6 +229,36 @@
 	\end{itemize}
 	
 	This surgical approach mitigates the \textbf{Variance Starvation Problem (VSP)}. In VSP, a model minimises the Beta NLL by artificially inflating $\mathrm{Var}[y]$ (i.e., reducing the concentration $\kappa = \hat{\alpha}+\hat{\beta}$) on hard samples; the gradient to the mean head then vanishes because the loss term becomes insensitive to prediction error. By freezing the majority of the backbone and updating only the listed surgical layers, we force the model to improve genuine feature alignment rather than using uncertainty as a "slack variable" to bypass difficult data.
+	
+	\subsection{Architectural Justification for the Beta Regression Framework}
+	To model bounded continuous engagement levels $y \in [0,1]$ alongside reliable predictive uncertainty, several alternative statistical formulations could be considered: the Kumaraswamy distribution, logit-normal regression, and distribution-free conformalized regression. In this section, we mathematically demonstrate why the Beta distribution is uniquely suited to meet the real-time constraints, closed-form requirement, and test-time adaptation (TTA) mechanics of EngageNet.
+	
+	\subsubsection*{Comparison with the Kumaraswamy Distribution}
+	The Kumaraswamy distribution \cite{kumaraswamy1980} is often preferred over the Beta distribution in standard deep learning tasks \cite{pumi2020} because its probability density function and cumulative distribution function rely strictly on elementary algebraic powers, avoiding transcendental functions. For shape parameters $a, b > 0$, its CDF is $F(x; a, b) = 1 - (1-x^a)^b$. This formulation simplifies the calculation of the Negative Log-Likelihood (NLL) during training and avoids computing digamma and trigamma functions during backpropagation, circumventing the gradient instabilities that cause the Variance Starvation Problem (VSP).
+	
+	However, EngageNet's TTA selection filter $S(x)$ evaluates the predictive variance $U(x)$ at \textit{inference time} on every incoming frame of a non-stationary data stream. The $n$-th raw moment of a Kumaraswamy random variable $Y$ is given by:
+	$$\mathbb{E}[Y^n] = b \cdot B\left(1 + \frac{n}{a}, b\right) = \frac{b \, \Gamma(1 + n/a)\,\Gamma(b)}{\Gamma(1 + n/a + b)}$$
+	where $B(\cdot,\cdot)$ is the transcendental Beta function and $\Gamma(\cdot)$ is the Gamma function. Consequently, the predictive variance of the Kumaraswamy distribution is expressed as:
+	$$\text{Var}[Y] = b \cdot B\left(1 + \frac{2}{a}, b\right) - \left[ b \cdot B\left(1 + \frac{1}{a}, b\right) \right]^2$$
+	If EngageNet adopted the Kumaraswamy distribution, the model would be forced to compute multiple expensive Gamma and Beta functions during real-time streaming inference to evaluate the TTA filter. In contrast, the Beta distribution shifts this transcendental computational burden entirely to the offline training phase via the polygamma functions in the backward pass. Its inference-time predictive variance $U(x)$ is computed via lightweight, pure algebraic operations:
+	$$U(x) = \frac{\alpha \beta}{(\alpha + \beta)^2 (\alpha + \beta + 1)}$$
+	Furthermore, proving a strictly monotonic relationship between the variance $\text{Var}[Y]$ and the differential entropy $H(Y)$ under arbitrary parameter updates is mathematically intractable for the Kumaraswamy distribution, whereas the Beta distribution cleanly satisfies $\frac{\partial U}{\partial \kappa} < 0$ and $\frac{\partial H}{\partial \kappa} < 0$ under the precision mapping $\kappa = \alpha + \beta$.
+	
+	\subsubsection*{Comparison with Logit-Normal Regression}
+	Logit-normal regression maps the bounded domain $y \in [0,1]$ to an unbounded latent domain $z \in \R$ using the logit transformation, assuming the latent variable follows a Gaussian distribution:
+	$$z = \text{logit}(y) = \ln\left(\frac{y}{1-y}\right) \sim \mathcal{N}(\mu, \sigma^2)$$
+	While the latent Gaussian log-likelihood is highly stable to optimize during training, the moments of the resulting logit-normal variable do not exist in closed form. The true predictive mean and variance must be resolved via numerical integration:
+	$$\mathbb{E}[Y] = \int_{0}^{1} \frac{1}{y(1-y)\sigma\sqrt{2\pi}} \exp\left( -\frac{(\text{logit}(y) - \mu)^2}{2\sigma^2} \right) \cdot y \, dy$$
+	Performing numerical integration over $N$ categories across multiple unimodal branches for every incoming frame introduces an insurmountable latency bottleneck during real-time test-time adaptation. 
+	
+	Crucially, EngageNet utilizes an inter-modal information sharing loss ($\mathcal{L}_{mis}$) that minimizes the Kullback-Leibler (KL) divergence between the unimodal predictions and the fused network prediction. While computing the KL divergence between two latent Gaussians in logit space is trivial, minimizing it optimizes a distorted geometry that stretches gradients to infinity near the boundaries ($0$ and $1$). Computing the exact KL divergence between two true logit-normal densities within the probability domain $[0,1]$ lacks an analytical closed-form expression \cite{aitchison1980}. Because the Beta distribution possesses a known analytical KL divergence \ref{eq:beta_kl}, it provides a stable, exact, and geometry-preserving target for cross-modal alignment.
+	
+	\subsubsection*{Comparison with Conformalized Regression}
+	Conformalized regression (or Conformal Prediction) \cite{romano2019} offers a distribution-free, non-parametric framework that provides a valid prediction interval $[ \hat{y} - q, \hat{y} + q ]$ satisfying a user-defined coverage guarantee $1 - \alpha$. While mathematically robust, conformal prediction fundamentally requires the data stream to satisfy the property of exchangeability. 
+	
+	In streaming test-time adaptation settings, the user exhibits non-stationary distribution shifts (e.g., sensor degradation, fluctuating lighting conditions, or progressive fatigue). This explicitly violates the exchangeability assumption, causing the empirical quantile threshold $q$ computed on a static source calibration set to lose its strict coverage guarantees. While online adaptive variants (such as Adaptive Conformal Inference) \cite{gibbs2021} can dynamically scale the interval width based on sequential coverage errors, they operate as reactive heuristic controllers rather than generative models of the target density.
+	
+	Most importantly, conformal prediction produces a discrete boundary region rather than a smooth, parametric probability density function. Because it is non-differentiable, it cannot supply a gradient operator to backpropagate local self-supervised likelihood updates ($\mathcal{L}_{TTA}$) during a single-frame backward pass. It also cannot participate in information-theoretic objectives like the mutual information sharing loss ($\mathcal{L}_{mis}$). Thus, while conformal regression is excellent for post-hoc uncertainty visualization, it cannot serve as the active functional engine that drives online weight updates within an adaptive neural network architecture.
 	
 	\section{Permutation-Equivariant Inter-modal Fusion}
 	
@@ -259,10 +290,10 @@
 	
 	We replace the fixed concatenation order with a \emph{learned, input-dependent permutation} computed differentiably via the Gumbel-Sinkhorn operator \cite{mena2018}. The key intuition is that the optimal ordering is itself a function of the data: for a sample in which audio is uninformative, placing it first in the forward SSM pass deposits unreliable context into the hidden states of all subsequent modalities, whereas placing it last confines the contamination to the final position.
 	
-	\paragraph{Uniform channel projection.}
+	\subsubsection*{Uniform channel projection}
 	Different InitEncoders naturally produce output representations of different widths: for instance, an audio encoder may output $C_{\text{audio}}' = 64$ channels while a video encoder outputs $C_{\text{video}}' = 256$ channels. These \emph{heterogeneous dimensions} prevent treating the modality outputs as interchangeable objects of the same type, which is a prerequisite for learning a permutation over them. To resolve this, a modality-specific affine map $f_i : \R^{C_i'} \to \R^{C'}$, defined by $f_i(v) = W_i^{\text{proj}} v + b_i^{\text{proj}}$ with $W_i^{\text{proj}} \in \R^{C' \times C_i'}$ and $b_i^{\text{proj}} \in \R^{C'}$, is appended to each InitEncoder to linearly project its output into a shared embedding space of dimension $C'$. After this projection, $u_i \in \R^{L' \times C'}$ for all $i \in \{1,\dots,M\}$. The matrix $U$ is then the concatenation of these uniformly-dimensioned representations along the channel axis: $U = u_1 \circ u_2 \circ \dots \circ u_M \in \R^{L' \times MC'}$, where each $u_i$ contributes exactly $C'$ columns.
 	
-	\paragraph{Score matrix.}
+	\subsubsection*{Score matrix}
 	A \emph{meta-network} $\phi$ is a small auxiliary network whose sole purpose is to predict how modalities should be ordered, operating on top of the main feature representations without participating in the primary task of engagement prediction. Concretely, $\phi$ maps the set $\{u_i\}_{i=1}^M$ to an $M \times M$ assignment \emph{score} matrix $Z \in \R^{M \times M}$, where the entry $Z_{ij}$ quantifies the fitness of placing modality $j$ at sequence position $i$ in the inter-modal BiMamba: a large value of $Z_{ij}$ means the meta-network believes modality $j$ should be processed at step $i$. Each modality representation is first summarised by temporal mean-pooling:
 	$$\bar{u}_i = \frac{1}{L'}\sum_{t=1}^{L'} u_i^{(t)} \in \R^{C'}.$$
 	Two asymmetric projections into a score-embedding space of dimension $d_s$ then produce query and key vectors:
@@ -271,7 +302,7 @@
 	$$Z_{ij} = \frac{q_i^\top k_j}{\sqrt{d_s}}.$$
 	The asymmetry of the query-key factorisation is intentional: it allows the model to distinguish between a modality acting as a \emph{context supplier} (the key role) and a modality acting as a \emph{context receiver} (the query role), and assigns independent scores to each direction. A symmetric formulation $Z_{ij} = z_i^\top z_j$ would force $Z = Z^\top$, which in turn constrains the learned permutation matrix $P$ to be symmetric. The only symmetric permutation matrices are \emph{involutions} - permutations that are their own inverse ($\pi = \pi^{-1}$), corresponding to products of disjoint transpositions (swaps). This would unnecessarily halve the space of learnable orderings, excluding, for example, cyclic permutations of three or more modalities.
 	
-	\paragraph{Gumbel perturbation.}
+	\subsubsection*{Gumbel perturbation}
 	The Gumbel distribution is classically used in extreme value theory to model the asymptotic distribution of the maximum of a sequence of independent and identically distributed random variables. Its probability density function for location $\mu$ and scale $\beta$ is given by: 
 	$$f(x) = \frac{1}{\beta} e^{-(x-\mu)/\beta} e^{-e^{-(x-\mu)/\beta}}$$ 
 	In deep learning, the Gumbel-Max trick \cite{jang2017} leverages this distribution to draw discrete samples from a categorical distribution in a fully differentiable manner. By adding independent Gumbel noise to unnormalized log-probabilities (scores), the deterministic argmax of these perturbed values becomes mathematically equivalent to drawing a sample from the true underlying multinomial distribution. 
@@ -280,7 +311,7 @@
 	$$\tilde{Z}_{ij} = \frac{Z_{ij} + G_{ij}}{\tau}, \qquad G_{ij} = -\ln(-\ln U_{ij}), \quad U_{ij} \overset{\text{i.i.d.}}{\sim} \mathrm{Uniform}(0,1).$$
 	The temperature $\tau$ is annealed over the course of training to progressively concentrate probability mass towards a single hard permutation. We adopt a standard exponential decay schedule, updating the temperature at each epoch $t$ via $\tau_t = \max(\tau_\infty, \tau_0 \cdot \gamma^t)$, where $\gamma \in (0, 1)$ represents the decay rate, starting from an initial exploration temperature $\tau_0$ (e.g., $1.0$) down to a tight categorical approximation threshold $\tau_\infty$ (e.g., $0.05$).
 	
-	\paragraph{Sinkhorn normalisation.}
+	\subsubsection*{Sinkhorn normalisation}
 	The \textbf{Birkhoff-von Neumann theorem} \cite{birkhoff1946} establishes that the set of doubly-stochastic matrices (square matrices with non-negative real entries whose rows and columns each sum to exactly $1$) constitutes a convex polytope whose extreme points are precisely the set of discrete permutation matrices. Geometrically, a convex polytope is a bounded, multi-dimensional solid defined by flat facets, and its extreme points represent its absolute vertices. Because any interior point of a convex polytope can be expressed uniquely as a convex combination (a weighted average) of its vertices, any doubly-stochastic matrix can be decomposed into a convex combination of hard permutation matrices. This structural property makes the Birkhoff polytope a mathematically principled continuous relaxation of discrete permutations.
 	
 	A standard Softmax operator is insufficient in this context because it operates independently across a single dimension, ensuring only that the rows sum to $1$ (yielding a row-stochastic matrix). In an inter-modal fusion framework where rows represent sequence positions and columns map to distinct modalities, a row-stochastic matrix introduces severe structural redundancies. It permits multiple sequence positions to concurrently assign high probability mass to the exact same dominant modality column (such as audio), which causes the network to attend to duplicate representations while completely suppressing and ignoring other available modalities. 
@@ -289,19 +320,19 @@
 	$$P = \text{Sinkhorn}\bigl(\exp(\tilde{Z})\bigr).$$
 	The Sinkhorn-Knopp algorithm achieves normalisation by alternating between row and column scaling operations. Because the exponential map $\exp(\tilde{Z})$ guarantees that all initial entries are strictly positive ($>0$), the resulting row and column sums are bounded strictly away from zero. This structural guarantee completely eliminates the risk of numerical division-by-zero errors (NaN), ensuring that the iterative scaling steps remain entirely smooth and differentiable. Consequently, the gradient operator $\displaystyle \frac{\partial P}{\partial Z}$ remains mathematically well-conditioned throughout optimization, enabling robust, end-to-end backpropagation of the latent modal ordering.
 	
-	\paragraph{Soft reordering.}
+	\subsubsection*{Soft reordering}
 	With $P$ computed as above, the permuted representation for position $i$ is the $P$-weighted convex combination of all intra-modal outputs. Concretely, the $i$-th row of $P$, denoted $P_{i\cdot} = (P_{i1}, \dots, P_{iM})$, defines a probability distribution over the $M$ modalities; since $P$ is doubly-stochastic, we have $P_{ij} \geq 0$ and $\sum_j P_{ij} = 1$ for every $i$. The soft assignment is then:
 	$$\tilde{u}_i = \sum_{j=1}^{M} P_{ij}\,u_j \in \R^{L' \times C'}, \qquad i \in \{1,\dots,M\}.$$
 	The entry $P_{ij} \in [0,1]$ is the soft probability that modality $j$ is assigned to position $i$ in the inter-modal sequence; when $P$ is close to a hard permutation matrix (as happens after temperature annealing), exactly one $P_{ij}$ per row will be close to 1 and the rest close to 0, recovering a near-discrete assignment. The fixed concatenation $m$ is replaced by
 	$$\tilde{m} = \text{Transpose}(\tilde{u}_1 \circ \tilde{u}_2 \circ \dots \circ \tilde{u}_M) \in \R^{MC' \times L'},$$
 	and the inter-modal BiMamba operates on $\tilde{m}$ instead of $m$; all equations in Section 1.2.2 remain unchanged under this substitution.
 	
-	\paragraph{Inference.}
+	\subsubsection*{Inference}
 	At test time, Gumbel noise is suppressed ($G_{ij} = 0$). If a hard permutation is required (e.g.\ for latency-critical deployment), the optimal discrete assignment is recovered by solving the linear assignment problem over the score matrix $Z$:
 	$$\pi^* = \arg\min_{\pi \in S_M} \sum_{i=1}^{M} \bigl(-Z_{i,\pi(i)}\bigr),$$
 	where $S_M$ denotes the symmetric group - the set of all $M!$ bijections from $\{1,\dots,M\}$ to itself, i.e.\ all possible orderings of the $M$ modalities. This minimisation is solved by applying the Hungarian algorithm to $-Z$ in $O(M^3)$ time, which is negligible for the small modality counts typical in multimodal sensing.
 	
-	\paragraph{Equivariance guarantee.}
+	\subsubsection*{Equivariance guarantee}
 	Let $\rho \in S_M$ be applied to the inputs before the meta-network. Because $Z_{ij}$ is computed from the data via the shared query-key projections, relabelling the inputs by $\rho$ relabels the rows and columns of $Z$ by $\rho$ as well, and consequently the recovered hard permutation transforms as $\pi^*_\rho = \rho \circ \pi^*$. The permuted sequence fed to the inter-modal BiMamba is therefore the same physical ordering of modalities regardless of how the practitioner originally numbered them. Consequently, the fused representation $H = \text{BiMamba}(\tilde{m})$ is invariant to the practitioner's arbitrary choice of concatenation order, provided the model has converged to a stable optimal ordering $\pi^*$.
 	
 	\newpage
@@ -328,6 +359,20 @@
 		\bibitem{birkhoff1946}
 		Garrett Birkhoff, \emph{Tres observaciones sobre el algebra lineal}, Universidad Nacional de Tucum\'{a}n, Revista, Serie A, 5:147--151 (1946).
 		
+		\bibitem{aitchison1980}
+		Aitchison, J., \& Shen, S. M. (1980). \emph{Logistic-normal distributions: Some properties and uses}. Biometrika, 67(2), 261--272.
+		
+		\bibitem{kumaraswamy1980}
+		P. Kumaraswamy, \emph{A generalized probability density function for double-bounded random processes}, Journal of Hydrology, 46, 79--88 (1980).
+		
+		\bibitem{pumi2020}
+		Guilherme Pumi, Cleber Rauber, and Fabio M. Bayer, \emph{Kumaraswamy regression model with Aranda-Ordaz link function}, TEST: An Official Journal of the Spanish Society of Statistics and Operations Research, Springer;Sociedad de Estadística e Investigación Operativa, 29(4), 1051--1071, December (2020).
+		
+		\bibitem{romano2019}
+		Yaniv Romano, Evan Patterson, and Emmanuel J. Candès, \emph{Conformalized Quantile Regression}, Advances in Neural Information Processing Systems (NeurIPS 2019), 32 (2019).
+		
+		\bibitem{gibbs2021}
+		Isaac Gibbs and Emmanuel Candès, \emph{Adaptive Conformal Inference Under Distribution Shift}, Advances in Neural Information Processing Systems (NeurIPS 2021), 34, 1660--1672 (2021).
 	\end{thebibliography}
 	
 \end{document}
