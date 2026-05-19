@@ -38,7 +38,7 @@ def main() -> None:
     keys = sorted(keys)
     hiddens = {k: jax.random.normal(jax.random.fold_in(rng_data, i), (B, Lp, Cp)) for i, k in enumerate(keys)}
 
-    model = InterModalBiMamba(D=D, N=16, D_C=4, d_key=64, n_iters=10)
+    model = InterModalBiMamba(D=D, N=16, D_C=4, GS_dim=64, n_iters=10)
 
     variables = model.init(rng_init, hiddens, tau=1.0, rng=rng_gumbel, train=False)
     param_count = sum(x.size for x in jax.tree.leaves(variables["params"]))

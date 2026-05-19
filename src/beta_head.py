@@ -35,7 +35,7 @@ class BetaHead(nn.Module):
         alpha_logit = nn.Dense(features=1)(y_proj)
         beta_logit = nn.Dense(features=1)(y_proj)
 
-        alpha, beta = jnp.softplus(alpha_logit) + 1, jnp.softplus(beta_logit) + 1
+        alpha, beta = jax.nn.softplus(alpha_logit) + 1, jax.nn.softplus(beta_logit) + 1
 
         return alpha.squeeze(-1), beta.squeeze(-1)
 

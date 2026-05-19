@@ -43,7 +43,7 @@ class InterModalBiMamba(nn.Module):
     D: int                  # BiMamba hidden dim
     N: int                  # SSM state dim
     D_C: int                # depthwise conv kernel size
-    d_key: int = 64         # Gumbel-Sinkhorn projection dim
+    GS_dim: int = 64         # Gumbel-Sinkhorn projection dim
     n_iters: int = 10       # Sinkhorn iterations
 
     # hiddens: dict{str: (B, L', C')} ; tau: Gumbel temperature ; rng: PRNGKey or None -> H: (B, L', MC')
@@ -56,7 +56,7 @@ class InterModalBiMamba(nn.Module):
 
         summaries = stacked.mean(axis=2)  # Temporal mean-pool each modality -> summaries (B, M, C')
 
-        gs = GumbelSinkhorn(M=M, d_key=self.d_key, n_iters=self.n_iters, name="gumbel_sinkhorn")
+        gs = GumbelSinkhorn(M=M, d_key=self.GS_dim, n_iters=self.n_iters, name="gumbel_sinkhorn")
         P = gs(summaries, tau=tau, rng=rng)  # (B, M, M)
 
         reordered = jnp.einsum("bij,bjlc->bilc", P, stacked)  # reordered[b,i] = sum_j P[b,i,j] * stacked[b,j] -> (B, M, L', C')

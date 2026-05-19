@@ -96,8 +96,6 @@ Second, `InterModalBiMamba`: stacks all modality representations into `(B, M, L'
 Verifies three things on CPU with synthetic data: (1) `P` is doubly stochastic (row and column sums within 1e-3 of 1.0), (2) output shape matches `(B, L', MC')`, and (3) the model runs without errors. Uses `M=8` modalities (4 features x 2 roles) with `C'=128` giving `MC'=1024`.
 
 
-## TODO
-
 ### `src/beta_head.py`
 
 A `BetaHead` Flax module: mean-pool over the time axis, then two `nn.Dense` layers producing raw logits for alpha and beta, followed by `softplus + 1` to get valid shape parameters both greater than one (ensuring a unimodal distribution). Add static methods for `predictive_mean` (alpha divided by alpha plus beta), `predictive_variance` (the TTA uncertainty proxy: alpha times beta divided by the square of their sum times their sum plus one), and `nll_loss` (Beta negative log-likelihood). Then write `MultiHeadBeta` that instantiates one `BetaHead` per modality key (the unimodal heads fed directly by each per-modality output of `IntraModalBiMamba`) plus one for the fused inter-modal output - all needed by the TTA sample selection filter.
@@ -107,6 +105,8 @@ A `BetaHead` Flax module: mean-pool over the time axis, then two `nn.Dense` laye
 The full `EngageNet` Flax module that wires everything together in order: `ModalityFrontend` -> `IntraModalBiMamba` -> `InterModalBiMamba` -> `MultiHeadBeta`. Returns a dict with the multimodal prediction (alpha and beta for the fused output) and all unimodal predictions (alpha and beta per modality). The unimodal outputs are needed at train time for the TTA loss but are cheap to compute here since the unimodal heads share the already-computed per-modality representations.
 
 Add `tests/test_model.py`: full forward pass smoke test analogous to the existing `test_frontend.py`.
+
+## TODO
 
 ### `src/train.py`
 
