@@ -6,9 +6,7 @@ This markdown file describes the coding decisions we made after having an initia
 
 The NoXi+J dataset alone is 88.2 GiB of pre-extracted feature streams across 50 sessions, with 10 feature modalities per role (expert and novice) per session. Neither my laptop (HP Elitebook) nor potentially the data centre machines can hold all of this in RAM at once. So the very first engineering constraint is: **nothing loads the full dataset into memory**. Every piece of the pipeline must stream from disk, process one session (or one window within a session) at a time, and discard it before moving on.
 
-The second constraint is hardware portability. I test on my local machine which has no GPU - only CPU. Training happens on a remote data centre node with NVIDIA GPUs accessed over SSH. The code must run identically on both. We chose JAX + Flax for the model because JAX transparently dispatches to CPU or GPU depending on what is available, with zero code changes. All randomness uses `jax.random` PRNGKeys rather than NumPy's `np.random` generators so that the random state is explicit, reproducible, and compatible with JAX's functional paradigm (no hidden global state).
-
-The third constraint is that we only implement the data pipeline and the `InitEncoder_i` + uniform channel projection layers in this phase. Everything from BiMamba onward I will write myself. The handoff point is a dictionary of tensors `{"{role}.{feat}": h_i}` where each `h_i` has shape `(B, L', C')` - batched, time-first, projected to the shared embedding dimension.
+The second constraint is hardware portability. I test on my local machine which has no GPU - only CPU. Training happens on a remote data centre node with NVIDIA GPUs accessed over SSH. The code must run identically on both. All randomness uses `jax.random` PRNGKeys rather than NumPy's `np.random` generators so that the random state is explicit, reproducible, and compatible with JAX's functional paradigm (no hidden global state).
 
 ## Phase 1: Data Pipeline and InitEncoder Frontend (Implemented)
 
