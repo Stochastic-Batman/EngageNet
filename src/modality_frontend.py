@@ -11,8 +11,6 @@ from __future__ import annotations
 import flax.linen as nn
 import jax.numpy as jnp
 
-from typing import Dict
-
 from config import EngageNetConfig
 from init_encoder import InitEncoder
 from read_data import ROLES
@@ -24,7 +22,7 @@ class ModalityFrontend(nn.Module):
     cnfg: EngageNetConfig
 
     @nn.compact
-    def __call__(self, inputs: Dict[str, jnp.ndarray], *, train: bool = True) -> Dict[str, jnp.ndarray]:
+    def __call__(self, inputs: dict[str, jnp.ndarray], *, train: bool = True) -> dict[str, jnp.ndarray]:
         """
         inputs : dict
             Keys are "{role}.{feat}" with values of shape (B, C_i, L).
@@ -37,7 +35,7 @@ class ModalityFrontend(nn.Module):
             Same keys as inputs (minus missing ones), values (B, L', C').
         """
         cnfg = self.cnfg
-        hiddens: Dict[str, jnp.ndarray] = {}
+        hiddens: dict[str, jnp.ndarray] = {}
 
         # Only iterate over active modalities (respects cnfg.active_modalities filter)
         for feat, (_, c_out, ks, stride) in cnfg.active_specs.items():

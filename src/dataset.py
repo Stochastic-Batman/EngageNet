@@ -12,7 +12,7 @@ import numpy as np
 
 from pathlib import Path
 from scipy.interpolate import interp1d
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Iterator, Optional
 
 from config import EngageNetConfig
 from read_data import ROLES, STREAM_FEATURES, load_session, log
@@ -50,7 +50,7 @@ class EngageNetDataset:
     """Lazy window iterator over a corpus split.
 
     cnfg : EngageNetConfig
-        Global configuration (paths, window settings, modality specs, …).
+        Global configuration (paths, window settings, modality specs, ...).
     split : str
         One of "train", "val", "test".
     """
@@ -62,15 +62,15 @@ class EngageNetDataset:
         self.split = split
         
         split_path = cnfg.split_dir(split)
-        self.session_dirs: List[Path] = sorted([p for p in split_path.iterdir() if p.is_dir()])
+        self.session_dirs: list[Path] = sorted([p for p in split_path.iterdir() if p.is_dir()])
         
         if not self.session_dirs:
             raise FileNotFoundError(f"No session directories found in {split_path}")
         
-        log.info(f"EngageNetDataset: {split} – {len(self.session_dirs)} sessions")
+        log.info(f"EngageNetDataset: {split} - {len(self.session_dirs)} sessions")
 
 
-    def iter_windows(self, shuffle_sessions: bool = False, rng_key: Optional[jax.Array] = None) -> Iterator[Dict[str, np.ndarray]]:
+    def iter_windows(self, shuffle_sessions: bool = False, rng_key: Optional[jax.Array] = None) -> Iterator[dict[str, np.ndarray]]:
         """Yield one window dict at a time, loading each session lazily.
 
         Each yielded dict contains:
@@ -82,20 +82,19 @@ class EngageNetDataset:
         if shuffle_sessions:
             if rng_key is None:
                 rng_key = jax.random.PRNGKey(0)
-            # Use JAX PRNG to generate a permutation, then convert to a plain list
             order = jax.random.permutation(rng_key, jnp.array(order)).tolist()
 
         for idx in order:
             yield from self._windows_from_session(self.session_dirs[idx])
 
 
-    def _windows_from_session(self, session_dir: Path) -> Iterator[Dict[str, np.ndarray]]:
+    def _windows_from_session(self, session_dir: Path) -> Iterator[dict[str, np.ndarray]]:
         session = load_session(session_dir)
         cnfg = self.cnfg
 
         # 1. Resample only active streams to target_sr -> dict[key] = (T, D)
         active_feats = cnfg.modality_names
-        resampled: Dict[str, np.ndarray] = {}
+        resampled: dict[str, np.ndarray] = {}
 
         for role in ROLES:
             streams = session[role].get("streams", {})
@@ -114,7 +113,7 @@ class EngageNetDataset:
         common_T = min(v.shape[0] for v in resampled.values())
 
         # 3. Also resample engagement labels (25 Hz -> target_sr, usually identity)
-        engagement: Dict[str, Optional[np.ndarray]] = {}
+        engagement: dict[str, Optional[np.ndarray]] = {}
         for role in ROLES:
             eng = session[role].get("engagement")
             if eng is not None:
@@ -133,7 +132,7 @@ class EngageNetDataset:
         for w in range(n_windows):
             start = w * S
             end = start + W
-            sample: Dict[str, np.ndarray] = {"session": session_dir.name}  # type: ignore[dict-item]
+            sample: dict[str, np.ndarray] = {"session": session_dir.name}  # type: ignore[dict-item]
             for key, arr in resampled.items():
                 chunk = _pad_or_trim(arr[start:end], W)
                 # Transpose to channels-first: (L, C_i) -> (C_i, L)

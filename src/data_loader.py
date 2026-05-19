@@ -10,20 +10,20 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from typing import Dict, Iterator, List
+from typing import Iterator
 
 from config import EngageNetConfig
 from dataset import EngageNetDataset
 
 
-def _collate(windows: List[Dict[str, np.ndarray]]) -> Dict[str, jnp.ndarray]:
+def _collate(windows: list[dict[str, np.ndarray]]) -> dict[str, jnp.ndarray]:
     """Stack a list of window dicts into a single batched dict of JAX arrays.
 
     Numeric arrays are stacked along a new leading batch axis.
     The "session" key is kept as a plain Python list of strings.
     """
-    batch: Dict[str, jnp.ndarray] = {}
-    keys = [k for k in windows[0] if k != "session"]
+    batch: dict[str, jnp.ndarray] = {}
+    keys = [k for k in windows[0].keys() if k != "session"]
     
     for k in keys:
         batch[k] = jnp.array(np.stack([w[k] for w in windows], axis=0))
@@ -33,7 +33,7 @@ def _collate(windows: List[Dict[str, np.ndarray]]) -> Dict[str, jnp.ndarray]:
     return batch
 
 
-def iter_batches(cnfg: EngageNetConfig, split: str, *, shuffle: bool = False, seed: int | None = None) -> Iterator[Dict[str, jnp.ndarray]]:
+def iter_batches(cnfg: EngageNetConfig, split: str, *, shuffle: bool = False, seed: int | None = None) -> Iterator[dict[str, jnp.ndarray]]:
     """Yield batches of size `cnfg.batch_size` from the given `split`.
 
     cnfg : EngageNetConfig
@@ -44,7 +44,7 @@ def iter_batches(cnfg: EngageNetConfig, split: str, *, shuffle: bool = False, se
     ds = EngageNetDataset(cnfg, split)
     rng_key = jax.random.PRNGKey(seed if seed is not None else 0) if shuffle else None
 
-    buf: List[Dict[str, np.ndarray]] = []
+    buf: list[dict[str, np.ndarray]] = []
     for window in ds.iter_windows(shuffle_sessions=shuffle, rng_key=rng_key):
         buf.append(window)
         if len(buf) == cnfg.batch_size:
