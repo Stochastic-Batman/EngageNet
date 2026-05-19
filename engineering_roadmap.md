@@ -20,7 +20,6 @@ A single `@dataclass` that centralises every hyperparameter and path so nothing 
 
 **`active_modalities: Optional[list[str]]`** - controls which pre-extracted feature streams are actually loaded and processed. Defaults to `None` (all 10 streams). Set to `CORE_MODALITIES` to use only the 4 streams most relevant to engagement: eGeMaps v2 (prosodic features), W2v-BERT 2.0 (learned speech representations), OpenFace2 (facial AUs, landmarks, gaze, head pose), and OpenPose (body posture and hand gestures). The remaining 6 streams (XLM-RoBERTa, CLIP, DINOv2, ImageBind, Swin, VideoMAE) are either redundant with the core 4 or encode generic visual semantics that don't vary meaningfully across engagement levels. This filter propagates everywhere: the dataset skips loading unused `.stream` files from disk, and the `ModalityFrontend` only creates encoders for active streams. Note that this only affects the pre-extracted feature streams - annotation data (engagement labels, transcripts, age, gender, language) is always loaded regardless, since it comes from separate CSV files outside the stream pipeline.
 
-Note: `encoder_act: str = "silu"` is declared but never read - `init_encoder.py` hardcodes `nn.silu(x)` directly. Either wire it up or remove it before the next phase.
 
 ### `src/dataset.py`
 
