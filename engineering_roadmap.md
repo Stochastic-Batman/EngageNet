@@ -106,7 +106,6 @@ The full `EngageNet` Flax module that wires everything together in order: `Modal
 
 Add `tests/test_model.py`: full forward pass smoke test analogous to the existing `test_frontend.py`.
 
-## TODO
 
 ### `src/train.py`
 
@@ -115,3 +114,8 @@ Standard Flax + Optax training loop. Create a `TrainState` with an AdamW optimis
 ### `src/tta.py`
 
 Implement the TTA loop. The two-level sample filter keeps samples where the multimodal uncertainty is low (the fused prediction is confident) but the weighted average of unimodal uncertainties is high (individual modalities disagree), using adaptive percentile thresholds maintained over a moving window of the most recent `K` frames. The mutual information sharing loss is the sum of closed-form KL divergences between each unimodal Beta distribution and the multimodal Beta distribution. The total TTA loss combines this with a pseudo-label supervision term that treats the multimodal predictive mean as a target for each unimodal head, weighted by a hyperparameter `lambda`. Surgical fine-tuning: a helper that takes a `TrainState` and returns a masked gradient update that only touches BatchNorm parameters, `conv1` in each `InitEncoder`, and the first linear layer in the inter-modal BiMamba - everything else gets a zero gradient.
+
+
+### Dockerfile set-up and actual training
+
+Basically what the title says.

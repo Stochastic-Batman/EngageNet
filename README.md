@@ -42,10 +42,10 @@ test/   127–132 147–150
 Each session folder contains the following files for both `expert` and `novice`:
 
 ```
-{role}.engagement.annotation.csv               # 25Hz frame-wise engagement score in [0,1], one float per line — train/val only
+{role}.engagement.annotation.csv               # 25Hz frame-wise engagement score in [0,1], one float per line - train/val only
 {role}.audio.transcript.annotation.csv         # Speech transcript: start_time;end_time;content;confidence
-{role}.age.annotation.csv                      # Encoded age category: format start;end;category_id;conf — decode via NoXi_MetaData.xlsx
-{role}.gender.annotation.csv                   # Encoded gender category: format start;end;category_id;conf — decode via NoXi_MetaData.xlsx
+{role}.age.annotation.csv                      # Encoded age category: format start;end;category_id;conf - decode via NoXi_MetaData.xlsx
+{role}.gender.annotation.csv                   # Encoded gender category: format start;end;category_id;conf - decode via NoXi_MetaData.xlsx
 language.annotation.csv                        # Session language: format start;end;language_name;conf (e.g. "Japanese")
 
 
@@ -187,6 +187,17 @@ python src/train.py --help
 ```
 
 Checkpoints are saved to `models/EngageNet_{epoch}` every `--checkpoint-every` epochs (default: 10).
+
+
+## Test-Time Adaptation
+
+TTA is applied at inference on unlabelled test data. It selectively fine-tunes surgical layers (BatchNorm, InitEncoder conv1, first Dense in cross-modal BiMamba) using samples where the multimodal prediction is confident but individual modality heads disagree. No ground-truth labels are needed - the multimodal predictive mean serves as a pseudo-target.
+
+Key functions in `src/tta.py`:
+- `sample_filter` - selects high-value adaptation samples via percentile thresholds on multimodal vs. unimodal uncertainty
+- `tta_loss` - mutual information sharing (KL divergence) + pseudo-label supervision
+- `surgical_mask` - freezes all parameters except the designated surgical layers
+- `tta_step` - single adaptation step with masked gradients
 
 
 ## Contributors
