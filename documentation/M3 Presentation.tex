@@ -148,6 +148,7 @@
 						Var (closed) & \checkmark & $\times$ & $\times$ \\
 						KL (closed) & \checkmark & $\times$ & $\sim$ \\
 						Fast inference & \checkmark & $\times$ & $\times$ \\
+						Fast training & $\times$ & \checkmark & \checkmark \\
 					\end{tabular}
 				\end{block}
 			\end{column}
@@ -343,7 +344,6 @@
 		\end{columns}
 	\end{frame}
 
-	%% PART 5: EVALUATION
 	\begin{frame}{\textsc{Part 5:} Evaluation Metrics}
 		\begin{columns}[onlytextwidth]
 			\begin{column}{0.50\textwidth}
@@ -365,8 +365,16 @@
 		\centering\small
 		Challenge ranking: maximise CCC while keeping CDD below threshold.
 	\end{frame}
+	
+	\begin{frame}{Responsible LLM Use}
+		\textit{Claude Sonnet 4.6} was used to code the following files (I was too lazy to write them myself):
+		\begin{itemize}
+			\item All 3 test files: \texttt{tests/test\_frontend.py}, \texttt{tests/test\_model.py} and \texttt{tests/test\_inter\_modal.py}
+			\item Forgot to include CCC, and I wanted to reach a milestone before \texttt{git push}: \texttt{src/evaluate.py}
+			\item I did not figure out a neat way to do the stuff: \texttt{surgical\_mask} method in \texttt{src/tta.py} 
+		\end{itemize}
+	\end{frame}
 
-	%% PART 6: STATUS
 	\begin{frame}{Status \& Next Steps}
 		\begin{columns}[onlytextwidth]
 			\begin{column}{0.48\textwidth}
