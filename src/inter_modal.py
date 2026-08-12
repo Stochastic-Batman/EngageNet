@@ -4,16 +4,25 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
+from jax.scipy.special import logsumexp
+
 from bimamba import BiMambaBlock
 
 
 # scores: (B, M, M) -> doubly-stochastic matrix P: (B, M, M)
 def sinkhorn(scores: jax.Array, n_iters: int = 10) -> jax.Array:
-    P = jnp.exp(scores)
+    """Sinkhorn normalisation carried out in log-space.
+
+    Normalising in probability space needs exp(scores) up front, which overflows
+    to +inf once the scores get large (real feature magnitudes reach 1e4-1e5);
+    the subsequent inf/inf then poisons the whole model with NaN. Alternating
+    log-domain normalisation is mathematically identical but numerically stable.
+    """
+    log_P = scores
     for _ in range(n_iters):
-        P = P / P.sum(axis=-1, keepdims=True)
-        P = P / P.sum(axis=-2, keepdims=True)
-    return P
+        log_P = log_P - logsumexp(log_P, axis=-1, keepdims=True)
+        log_P = log_P - logsumexp(log_P, axis=-2, keepdims=True)
+    return jnp.exp(log_P)
 
 
 class GumbelSinkhorn(nn.Module):

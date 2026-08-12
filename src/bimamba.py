@@ -12,15 +12,16 @@ class BiMambaBlock(nn.Module):
     D: int  # D
     N: int  # N
     D_C:  int  # depthwise convolution kernel size
+    pre_norm: bool = True  # LayerNorm on the residual stream
 
     # h: (B, L', D) -> (B, L', D)
     @nn.compact
     def __call__(self, h: jax.Array, *, train: bool = True) -> jax.Array:
         D, N = self.D, self.N
 
-        g = nn.silu(nn.Dense(D)(h))  # (B, L', D)
-
-        x = nn.Dense(D)(h)  # (B, L', D)
+        h_in = nn.LayerNorm(name="pre_norm")(h) if self.pre_norm else h
+        g = nn.silu(nn.Dense(D)(h_in))  # (B, L', D)
+        x = nn.Dense(D)(h_in)  # (B, L', D)
         
         x_fwd = nn.silu(nn.Conv(features=D, kernel_size=(self.D_C,), padding="SAME", feature_group_count=D)(x))
         # A stored in log-space so exp keeps it negative -> A_bar = exp(delta*A) in (0,1), stable

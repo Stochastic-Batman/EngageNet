@@ -95,10 +95,12 @@ def read_scalar_annotation(path: str | Path) -> str:
     return Path(path).read_text().strip().split(";")[2]
 
 
-def load_session(session_dir: str | Path) -> dict:
+def load_session(session_dir: str | Path, features: list[str] | None = None) -> dict:
     session_dir = Path(session_dir)
     log.info(f"loading session {session_dir}")
     session = {"path": str(session_dir), "expert": {}, "novice": {}}
+
+    wanted = STREAM_FEATURES if features is None else [f for f in STREAM_FEATURES if f in features]
 
     for role in ROLES:
         r = session[role]
@@ -120,7 +122,7 @@ def load_session(session_dir: str | Path) -> dict:
             log.debug(f"{role}.transcript: {len(r['transcript'])} utterances")
 
         r["streams"] = {}
-        for feat in STREAM_FEATURES:
+        for feat in wanted:
             p = session_dir / f"{role}.{feat}.stream"
             if p.exists():
                 data, sr = read_stream(p)
