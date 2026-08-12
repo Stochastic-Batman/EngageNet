@@ -21,6 +21,8 @@ from train import TrainState, create_train_state
 from tta import sample_filter, tta_step
 
 
+# Default targets the challenge submission (test has no labels, so evaluate.py
+# cannot score it). Use --submission-split val to produce scoreable predictions.
 SUBMISSION_CORPORA = [
     ("NoXi", "test"),
     ("NoXi+J", "test"),
@@ -103,7 +105,8 @@ def main():
 
     cnfg.submission_dir.mkdir(parents=True, exist_ok=True)
 
-    for corpus_name, split in SUBMISSION_CORPORA:
+    corpora = [(c, cnfg.submission_split or s) for c, s in SUBMISSION_CORPORA]
+    for corpus_name, split in corpora:
         sub_cnfg = dataclasses.replace(cnfg, corpus=corpus_name)
         split_path = sub_cnfg.split_dir(split)
 

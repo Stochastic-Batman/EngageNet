@@ -12,11 +12,33 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from metrics import ccc, combined_ccc, cdd_gender, cdd_language
-from read_data import ROLES, log
+from read_data import ROLES, log, read_scalar_annotation
 
 
 def load_csv(path: Path) -> np.ndarray:
     return np.loadtxt(path, delimiter=";", dtype=np.float32)
+
+
+def read_gender_raw(session_dir: Path, role: str) -> str:
+    p = session_dir / f"{role}.gender.annotation.csv"
+    return read_scalar_annotation(p).strip().lower() if p.exists() else ""
+
+
+def build_gender_map(raw_codes: set[str]) -> dict[str, int]:
+    named = {"female": 0, "male": 1, "f": 0, "m": 1}
+    present = {c for c in raw_codes if c}
+    if present and present <= set(named):
+        return {c: named[c] for c in present}
+
+    ordered = sorted(present)
+    if len(ordered) != 2:
+        return {}
+    return {ordered[0]: 0, ordered[1]: 1}
+
+
+def read_language(session_dir: Path) -> str:
+    p = session_dir / "language.annotation.csv"
+    return read_scalar_annotation(p).strip() if p.exists() else "unknown"
 
 
 def main():
@@ -31,6 +53,8 @@ def main():
     data_root = Path(args.data_root)
 
     per_domain_cccs: dict[str, float] = {}
+    per_domain_cdd_g: dict[str, float] = {}
+    per_domain_cdd_l: dict[str, dict[str, float]] = {}
 
     for corpus in args.corpora:
         gt_dir = data_root / corpus / args.split
@@ -45,11 +69,14 @@ def main():
 
         all_preds = []
         all_targets = []
+        all_genders = []
+        all_languages = []
 
         session_dirs = sorted([p for p in gt_dir.iterdir() if p.is_dir()])
 
         for session_dir in session_dirs:
             pred_session = pred_dir / session_dir.name
+            language = read_language(session_dir)
 
             for role in ROLES:
                 gt_path = session_dir / f"{role}.engagement.annotation.csv"
@@ -64,6 +91,9 @@ def main():
                 min_len = min(len(gt), len(pred))
                 all_preds.append(pred[:min_len])
                 all_targets.append(gt[:min_len])
+                # Gender is per participant, language per session - broadcast to per-frame
+                all_genders.append(np.full(min_len, read_gender_raw(session_dir, role), dtype=object))
+                all_languages.append(np.full(min_len, language, dtype=object))
 
         if not all_preds:
             log.info(f"{corpus}/{args.split}: no valid sessions")
@@ -75,11 +105,37 @@ def main():
         per_domain_cccs[corpus] = corpus_ccc
         log.info(f"{corpus}/{args.split}: CCC = {corpus_ccc:.4f} ({len(session_dirs)} sessions, {len(corpus_preds)} frames)")
 
+        # CDD_G - prediction bias between genders, matched within target-value bins.
+        raw_genders = np.concatenate(all_genders)
+        gmap = build_gender_map(set(raw_genders.tolist()))
+        if gmap:
+            genders = np.array([gmap.get(c, -1) for c in raw_genders], dtype=np.int8)
+            known = genders >= 0
+            g = cdd_gender(corpus_preds[known], corpus_targets[known], genders[known])
+            per_domain_cdd_g[corpus] = g
+            log.info(f"{corpus}/{args.split}: CDD_G = {g:+.4f} using code map {gmap} ({int(known.sum())} frames) - magnitude is meaningful, sign depends on which id is male (needs NoXi_MetaData.xlsx)")
+        else:
+            log.warning(f"{corpus}/{args.split}: CDD_G skipped - need exactly two gender codes, found {sorted(set(raw_genders.tolist()))}")
+
+        # CDD_L - per-language deviation from the overall prediction, within the same bins.
+        languages = np.concatenate(all_languages)
+        if len(np.unique(languages)) > 1:
+            l = cdd_language(corpus_preds, corpus_targets, languages)
+            per_domain_cdd_l[corpus] = l
+            log.info(f"{corpus}/{args.split}: CDD_L = " + ", ".join(f"{k}={v:.4f}" for k, v in sorted(l.items())))
+        else:
+            log.warning(f"{corpus}/{args.split}: CDD_L skipped - only one language present ({np.unique(languages).tolist()})")
+
     if per_domain_cccs:
         c_ccc = combined_ccc(per_domain_cccs)
         log.info(f"Combined CCC: {c_ccc:.4f}")
 
-    results = {"per_domain_ccc": per_domain_cccs, "combined_ccc": c_ccc if per_domain_cccs else None}
+    results = {
+        "per_domain_ccc": per_domain_cccs,
+        "combined_ccc": c_ccc if per_domain_cccs else None,
+        "per_domain_cdd_gender": per_domain_cdd_g,
+        "per_domain_cdd_language": per_domain_cdd_l,
+    }
     out_path = submission_dir / "results.json"
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)

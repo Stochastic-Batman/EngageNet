@@ -15,6 +15,7 @@ from scipy.interpolate import interp1d
 from typing import Iterator, Optional
 
 from config import EngageNetConfig
+from normalization import apply_stats, load_or_compute_stats
 from read_data import ROLES, STREAM_FEATURES, load_session, log
 
 
@@ -70,6 +71,9 @@ class EngageNetDataset:
 
         log.info(f"EngageNetDataset: {split} - {len(self.session_dirs)} sessions")
 
+        # Train-split statistics are used for every split (val/test included) to avoid leakage
+        self.norm_stats = load_or_compute_stats(cnfg) if cnfg.normalize_inputs else {}
+
 
     def iter_windows(self, shuffle_sessions: bool = False, rng_key: Optional[jax.Array] = None) -> Iterator[dict[str, np.ndarray]]:
         """Yield one window dict at a time, loading each session lazily.
@@ -90,8 +94,8 @@ class EngageNetDataset:
 
 
     def _windows_from_session(self, session_dir: Path) -> Iterator[dict[str, np.ndarray]]:
-        session = load_session(session_dir)
         cnfg = self.cnfg
+        session = load_session(session_dir, features=cnfg.modality_names)
 
         # 1. Resample only active streams to target_sr -> dict[key] = (T, D)
         active_feats = cnfg.modality_names
@@ -104,6 +108,7 @@ class EngageNetDataset:
                 if entry is None:
                     continue
                 data = _resample(entry["data"], entry["sr"], cnfg.target_sr)
+                data = apply_stats(data, self.norm_stats.get(feat))
                 resampled[f"{role}.{feat}"] = data
 
         if not resampled:
