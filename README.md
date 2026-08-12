@@ -80,6 +80,12 @@ Example `.stream` header:
 </stream>
 ```
 
+### Input Normalisation
+
+The raw streams live on wildly different scales - eGeMAPS reaches +-2.6e5 and OpenFace2 ±3e4, while W2v-BERT sits in +-4. Feeding those in unscaled makes activations grow by orders of magnitude through the network and training becomes useless.
+
+`src/normalization.py` standardises every channel to zero mean / unit variance. Statistics are computed **once over the train split only** (never val/test, to avoid leakage), then cached to `data/norm_stats_{corpus}.npz` and reused. The cache is created automatically on first run; delete it to force recomputation after changing the active modality set.
+
 ### Data Access
 
 To obtain the data, you must follow the official MultiMediate procedures:
@@ -102,38 +108,78 @@ The datasets provide the following multi-modal streams:
 
 ## Environment Setup
 
-This project uses **Python 3.14**. Use the following instructions to set up the dedicated virtual environment and install necessary dependencies.
+This project uses **Python 3.14**. Every pinned dependency (`jax`, `numpy`, `pandas`, `scipy`, `flax`) requires Python **3.11 or newer**, so system Pythons older than that will not work.
 
-### 1. Create the Virtual Environment
+We use [`uv`](https://docs.astral.sh/uv/) because it installs its own standalone Python into your home directory - no `sudo`, no system package manager, and no dependency on `ensurepip`/`python3-venv` being present. This matters on shared machines (e.g. the MICM cluster) where you do not have admin rights. Also, it is written in Rust and is much faster than its alternatives.
 
-```bash
-python3.14 -m venv EngageNet_venv
-source EngageNet_venv/bin/activate  # Linux/macOS
-.\EngageNet_venv\Scripts\activate   # Windows
-```
-
-### 2. Install Dependencies
+### 1. Install `uv` (once per machine)
 
 ```bash
-pip install --upgrade pip setuptools wheel
-pip install numpy pandas matplotlib scipy tqdm transformers
-
-# JAX ecosystem for NVIDIA GPU acceleration (with CPU fallback capability)
-pip install "jax[cuda12]" flax optax
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH" 
+uv --version
 ```
+
+### 2. Create the Virtual Environment
+
+```bash
+uv python install 3.14                          # downloads CPython 3.14 into ~/.local/share/uv
+uv venv --python 3.14 EngageNet_venv
+source EngageNet_venv/bin/activate              # Linux/macOS
+.\EngageNet_venv\Scripts\activate               # Windows
+python --version                                # expect Python 3.14.x
+```
+
+### 3. Install Dependencies
+
+```bash
+uv pip install -r requirements.txt
+```
+
+Verify the GPU is visible (on machines that have one):
+
+```bash
+python -c "import jax; print(jax.__version__); print(jax.devices())"
+```
+
+Expect `[CudaDevice(id=0), ...]`. If it prints `[CpuDevice(id=0)]`, JAX fell back to CPU.
+
+> **CPU-only machines:** `requirements.txt` pins `jax[cuda12]`, which pulls ~3 GB of NVIDIA wheels you will never use on a laptop without an NVIDIA GPU. For a local environment used only for editing, linting, and import checks, install the CPU build instead.
 
 > **Note for Windows Users:** To use the **NOVA** tool for manual session annotation and visualization, please refer to the [NOVA repository](https://github.com/hcmlab/nova).
 
+### Shared GPU Etiquette
+
+On multi-user machines, pin yourself to one GPU and disable JAX's default 75% memory preallocation so others can still use the card:
+
+```bash
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export CUDA_VISIBLE_DEVICES=1
+```
+
+XLA prints alarming `bfc_allocator ... ran out of memory` warnings during autotuning. These are rejected candidate algorithms, **not** failures - if the script prints its results, everything worked.
+
 ## Repository Structure
+
+> All scripts are run **from the repository root**. Both `src/` and `scripts/` rely on paths relative to the working directory (`sys.path.insert(0, "src")` and `data/...`), so `cd scripts && python find_nan.py` will fail.
 
 ```
 ├── data/                                     # Dataset root (gitignored)
 │   ├── NoXi/
 │   ├── NoXi+J/
-│   └── MPII/
+│   ├── MPII/
+│   └── norm_stats_{corpus}.npz               # Cached per-channel normalisation statistics
+├── models/                                   # Checkpoints written by training (gitignored)
+├── submissions/                              # Generated submission CSVs + results.json (gitignored)
 ├── Dockerfile.train/Dockerfile.inference    # Dockerfiles for training and inference
 ├── EngageNet_venv/                          # Python virtual environment
 ├── requirements.txt                         # For Docker
+├── scripts/                                 # Standalone dev/debug tools - not imported by src/
+│   ├── bench_step.py                        # Time train_step on synthetic batches (GPU cost vs data-loading cost)
+│   ├── check_collapse.py                    # Compare prediction spread vs target spread on val
+│   ├── check_data.py                        # Scan raw streams + labels for NaN/inf and value scales
+│   ├── find_nan.py                          # Run one real batch and report where NaN/inf first appears
+│   └── profile_load.py                      # Time disk read vs windowing for a single session
 ├── src/
 │   ├── aggregator.py                        # Overlap-add window predictions into session time series
 │   ├── beta_head.py                         # Beta regression heads (multimodal + per-modality)
@@ -148,6 +194,7 @@ pip install "jax[cuda12]" flax optax
 │   ├── metrics.py                           # CCC, CDD_G, CDD_L metric implementations
 │   ├── modality_frontend.py                 # Runs all InitEncoders + channel projections
 │   ├── model.py                             # Full EngageNet wiring all modules together
+│   ├── normalization.py                     # Per-channel input standardisation (train-split stats, cached)
 │   ├── read_data.py                         # Low-level SSI stream / annotation readers
 │   ├── ssm.py                               # Pure JAX selective state space scan primitive
 │   ├── train.py                             # Training loop (Optax + orbax checkpointing)
@@ -181,6 +228,28 @@ python tests/test_frontend.py && python tests/test_inter_modal.py && python test
 
 The `--core` flag restricts processing to `eGeMaps v2`, `W2v-BERT 2.0`, `OpenFace2`, and `OpenPose` - the streams most relevant to engagement prediction. See `CORE_MODALITIES` in `src/config.py`.
 
+## Development Scripts
+
+Diagnostic tools in `scripts/`, all run from the repository root. They import from `src/` and read from `data/`, so they need an activated environment and the dataset in place.
+
+```bash
+# Where does time go loading one session? (disk read vs windowing)
+python scripts/profile_load.py data/NoXi+J/train/086
+
+# How fast is a training step, independent of disk I/O?
+python scripts/bench_step.py
+
+# Are the raw streams and labels clean? (NaN/inf, value ranges)
+python scripts/check_data.py
+
+# Run one real batch and find where NaN/inf first appears
+python scripts/find_nan.py
+
+# Did the model collapse to a constant? (prediction spread vs target spread)
+python scripts/check_collapse.py
+```
+
+`check_collapse.py` loads `models/best`. A healthy model has a prediction std close to the target std; a collapsed model predicts nearly the same value everywhere, which scores near-zero CCC regardless of how confident it looks.
 
 ## Training
 
@@ -198,6 +267,18 @@ python src/train.py --help
 
 Checkpoints are saved to `models/EngageNet_{epoch}` every `--checkpoint-every` epochs (default: 10). Training includes CCC-based validation every epoch with early stopping (patience=10). The best checkpoint is saved to `models/best/`.
 
+> **Warning:** the checkpoint directory is fixed, so a new run **overwrites `models/best`** as soon as it beats its own first epoch. Back up any run you care about before starting another:
+> ```bash
+> cp -r models models_backup_$(date +%Y%m%d)
+> ```
+
+Long runs should go under `tmux` or `screen` so they survive a dropped SSH session:
+
+```bash
+tmux new -s train
+# ... start training, then detach with Ctrl-b then d
+tmux attach -t train
+```
 
 ## Test-Time Adaptation
 
@@ -209,7 +290,6 @@ Key functions in `src/tta.py`:
 - `surgical_mask` - freezes all parameters except the designated surgical layers
 - `tta_step` - single adaptation step with masked gradients
 
-
 ## Evaluation
 
 Score predictions against ground-truth (works on val split where labels exist):
@@ -220,6 +300,7 @@ python src/evaluate.py --submission-dir submissions/ --data-root data/ --corpora
 
 Outputs per-corpus CCC, Combined CCC, and saves `submissions/results.json`.
 
+Alongside CCC, the challenge requires two fairness metrics - **CDD_G** (gender) and **CDD_L** (language) - implemented in `src/metrics.py`. Both need the relevant subgroups to be present in the split being scored: CDD_L requires more than one language, and CDD_G requires more than one gender code. The NoXi+J val split satisfies both (Japanese sessions 121-126, Chinese sessions 143-146; both gender codes present).
 
 ## Docker
 
