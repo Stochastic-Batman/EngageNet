@@ -5,6 +5,8 @@
 \geometry{margin=1in}
 \usepackage{parskip}
 \usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
 
 \newcommand{\R}{\mathbb{R}}
 
@@ -16,56 +18,127 @@
 	\maketitle
 	
 	\begin{abstract}
-		EngageNet is a multimodal state-space architecture for real-time engagement regression in dyadic interactions. It combines per-modality bidirectional selective state-space models (BiMamba) with a differentiable Gumbel-Sinkhorn permutation layer for inter-modal fusion, and outputs calibrated predictions via Beta regression heads. A test-time adaptation mechanism leveraging predictive variance as an entropy proxy enables robust deployment under distribution shift across corpora (NoXi, NoXi+J, MPIIGroupInteracrion). The system is evaluated using the Concordance Correlation Coefficient (CCC) as the primary metric and the Compound Demographic Disparity (CDD) as a fairness constraint.
+		EngageNet is a multimodal state-space architecture for real-time engagement regression in dyadic interactions. It combines per-modality bidirectional selective state-space models (BiMamba) with a differentiable Gumbel-Sinkhorn permutation layer for inter-modal fusion, and outputs calibrated predictions via Beta regression heads. A test-time adaptation mechanism leveraging predictive variance as an entropy proxy enables robust deployment under distribution shift across corpora (NoXi, NoXi+J, MPIIGroupInteraction). The system is evaluated using the Concordance Correlation Coefficient (CCC) as the primary metric and the Conditional Demographic Disparity (CDD) as a fairness constraint.
 	\end{abstract}
 
 	\section{Architecture}
 	\subsection{Input}
 	Let $x=\{x_{1},\dots,x_{M}\}$ with $x_{i}\in\R^{C_{i}\times L}$ for all $i\in\{1,\dots,M\}$, where $C_{i}$ is the number of acquisition channels for the $i$-th modality and $L$ represents the number of time steps of the input signal.
 	
+	\subsubsection{Dyadic Structure and Role Streams}
+	Each session in the NoXi \cite{cafaro2017noxi} family of corpora - including the NoXi+J extension \cite{funk2024noxij} - is a screen-mediated dyadic interaction between an \emph{expert} and a \emph{novice}, recorded independently (separate cameras, separate microphones). Every feature type therefore arrives as two parallel streams, one per role, and both carry their own frame-wise engagement annotation.
+	
+	We denote by $\mathcal{F}$ the set of active feature types (e.g.\ eGeMAPS v2, W2v-BERT 2.0, OpenFace2, OpenPose) and by $\mathcal{R}=\{\text{expert},\text{novice}\}$ the set of roles. The index $i$ in $x_i$ ranges over the Cartesian product $\mathcal{F}\times\mathcal{R}$, so that
+	$$M = |\mathcal{F}| \times |\mathcal{R}| = 2|\mathcal{F}|.$$
+	With the four core feature types this yields $M = 8$ input streams. Every subsequent occurrence of $M$ in this document - including the modality-ordering permutation of Section 3 - refers to these role-feature pairs, not to feature types alone.
+	
+	\textbf{Weight sharing across roles.} The two roles observe the same physical signal semantics (an eGeMAPS vector means the same thing whether it was extracted from the expert's or the novice's microphone). Accordingly, the InitEncoder, the uniform channel projection, the intra-modal BiMamba block, and the unimodal Beta head are instantiated \emph{once per feature type} and applied to both roles. Only the inter-modal stage distinguishes the roles, since the permutation is learned over all $M$ role-feature pairs jointly. This halves the parameter count relative to per-role encoders and forces the shared representation to be role-agnostic.
+	
+	\textbf{Target construction.} The per-frame regression target is the mean of the two roles' engagement annotations,
+	$$y_t = \frac{1}{|\mathcal{R}|}\sum_{r\in\mathcal{R}} y_t^{(r)} \in [0,1].$$
+	\textcolor{red}{Note: the MultiMediate challenge specifies frame-wise prediction of \emph{each} interlocutor's engagement \cite{withanage25}. Averaging the two roles into a single trajectory is a simplification of the current implementation and is under review; predicting the two roles separately is expected to raise the attainable CCC.}
+	
+	\subsubsection{Input Standardisation}
+	The raw feature streams occupy vastly different numerical ranges: eGeMAPS v2 $\in [-2.6 \times 10^5, 2.6 \times 10^5$ and OpenFace2 $\in [-3 \times10^4, 3 \times 10^4]$, while W2v-BERT 2.0 embeddings lie within $[-4, 4]$. These magnitudes compound through the encoder and state-space stages, reaching $\sim 10^{11}$ at the cross-modal block and driving the Beta shape parameters to $\sim 10^{14}$, at which point the negative log-likelihood is numerically meaningless and optimisation fails.
+	
+	We therefore standardise every channel to zero mean and unit variance before it enters the network:
+	$$\tilde{x}_{i}^{(c)} = \frac{x_{i}^{(c)} - \mu_{i}^{(c)}}{\sigma_{i}^{(c)}}, \qquad c \in \{1,\dots,C_i\},$$
+	where the per-channel statistics are accumulated in double precision over the \textbf{training split only} and reused unchanged for validation and test. Channels whose standard deviation falls below $10^{-8}$ (constant channels) are centred but not rescaled, avoiding division by zero. Because the two roles share encoder weights, they necessarily share normalisation statistics as well. The statistics are computed once per corpus..
+	
 	\subsection{Output}
-	In \cite{ziyu2025}, $y$ is a discrete value corresponding to a category, which is then converted into a one-hot encoding $p(y|x)\in\R^{N}$ (where $N$ is the number of categories). In our case, since we are performing regression, $y\in[0,1] \implies p(y|x)\in[0,1]^{N}$, so our model outputs the predicted category probability $p(\hat{y}|x)\in[0,1]^{N}$.
+	For each frame $t$ of the encoded sequence the network emits two strictly positive shape parameters $(\alpha_t, \beta_t)$ that define a Beta predictive density over the bounded engagement scale,
+	$$p(y_t \mid x) = \mathrm{Beta}\bigl(\alpha_t(x),\,\beta_t(x)\bigr), \qquad y_t \in [0,1].$$
+	The scalar point prediction is the predictive mean:
+	$$\hat{y}_t = \hat{\mu}_t = \frac{\alpha_t}{\alpha_t + \beta_t} \in (0,1),$$
+	while the predictive variance supplies the uncertainty signal consumed by the test-time adaptation filter (Section 2.3). In contrast to \cite{ziyu2025}, where $y$ is a discrete class label represented as a one-hot vector $p(y|x)\in\R^{N}$ over $N$ categories, engagement estimation is a \emph{continuous bounded regression} problem: there is no category axis, and the network output for a window of length $L'$ has shape $(L', 2)$ rather than $(L', N)$.
+	
+	In addition to the fused multimodal head, the network exposes one \emph{unimodal} Beta head per feature type, attached to the corresponding intra-modal representation $u_i$ before fusion. These heads produce $(\alpha_i, \beta_i)$ and serve two purposes: deep supervision during training (Section 2.5) and the teacher-student consistency objective during test-time adaptation (Section 2.6).
 	
 	\subsection{Inner Workings}
 	We need to capture contextual information from physiological time series simultaneously, and a unidirectional approach cannot fully capture the complex temporal patterns. The multimodal BiMamba network consists of two modules: the intra-modal BiMamba module and the inter-modal BiMamba module. The former is designed to model each modality independently, while the latter effectively fuses multimodal features.
 	
 	\subsubsection{Intra-modal BiMamba Module}
-	First, an initial encoder $h_{i} = \text{InitEncoder}_{i}(x_{i}) \in \R^{L^{\prime}\times C_{i}^{\prime}}$ for all $i\in\{1,\dots,M\}$ is used to extract shallow features from a specific modality, where $C_{i}^{\prime}$ is the number of output channels and $L^{\prime}$ is the feature length of the output signal. 
+	First, an initial encoder $h_{i} = \text{InitEncoder}_{i}(\tilde{x}_{i}) \in \R^{L^{\prime}\times C^{\prime}}$ for all $i\in\{1,\dots,M\}$ is used to extract shallow features from a specific modality, where $C^{\prime}$ is the number of output channels and $L^{\prime}$ is the feature length of the output signal.
 	
-	The transposition of dimensions from $C_i \times L$ to $L^{\prime} \times C_i^{\prime}$ physically aligns the data structure with the sequence-first requirement of autoregressive models. By enforcing the sequence length $L^{\prime}$ as the primary operational dimension, the subsequent state-space and 1D convolutional operators can process the temporal dimension across the channel feature space.
+	The transposition of dimensions from $C_i \times L$ to $L^{\prime} \times C^{\prime}$ physically aligns the data structure with the sequence-first requirement of autoregressive models. By enforcing the sequence length $L^{\prime}$ as the primary operational dimension, the subsequent state-space and 1D convolutional operators can process the temporal dimension across the channel feature space.
 	
-	The BiMamba module operates as follows:
+	\textbf{InitEncoder internals.} Each InitEncoder is a shallow three-stage block applied to the standardised input:
+	$$h_i = \text{InitEncoder}_i(\tilde{x}_i) = f_i\Bigl(\sigma\bigl(\text{BN}\bigl(\text{Conv1D}_i(\tilde{x}_i^{\top})\bigr)\bigr)\Bigr),$$
+	where $\text{Conv1D}_i$ is a temporal convolution with kernel size $k_i$, stride $s_i$ and \texttt{SAME} padding mapping $C_i \to C_i'$ channels (the stride controls the downsampling $L \to L'$); $\text{BN}$ is batch normalisation \cite{ioffe2015batchnorm} over the channel axis, whose running statistics are frozen at evaluation time and which later serves as a surgical adaptation target (Section 2.6); $\sigma(x) = \frac{x}{1 + e^{-x}}$ is the SiLU activation function, and $f_i$ is the uniform channel projection defined in Section 3.2.1, mapping $C_i' \to C'$ so that all modalities share a common width. Encoder weights are shared between the expert and novice streams of the same feature type.
+	
+	The BiMamba module operates on $h_i$ as follows. Let $\text{LN}(\cdot)$ denote layer normalisation \cite{ba2016layernorm}.
 	\begin{enumerate}
-		\item The output of the gating mechanism is $g_{i}=\sigma(W_{i}^{g}h_{i}+b_{i}^{g})$, where $h_{i}$ is the hidden state, $W_{i}^{g}$ is the weight matrix, $b_{i}^{g}$ is the bias, and $\displaystyle \sigma(x)=x\cdot\frac{1}{1+e^{-x}}$ (SiLU). Intuitively, $g_{i}$ highlights emotion-relevant information while suppressing noise and redundancy.
+		\item \textbf{Pre-normalisation.} The block input is normalised before any projection:
+		$$\bar{h}_{i} = \text{LN}(h_{i}) \in \R^{L^{\prime}\times C^{\prime}}.$$
+		Without this step the residual stream is unnormalised at every depth and activation magnitudes compound multiplicatively through the stacked intra-modal and cross-modal blocks. Empirically the absolute activation maximum grew from $\sim\!10$ at the frontend to $\sim\!6\times10^{11}$ at the cross-modal stage, saturating the Beta heads and destroying the gradient signal. Pre-normalisation keeps the block input at unit scale while leaving the residual path (step 4) untouched.
+		
+	    \item The output of the gating mechanism is $g_{i}=\sigma(W_{i}^{g}\bar{h}_{i}+b_{i}^{g})$, where $W_{i}^{g}$ is the weight matrix, $b_{i}^{g}$ is the bias, and $\displaystyle \sigma(x) = \frac{x}{1 + e^{-x}}$. Intuitively, $g_{i}$ highlights engagement-relevant information while suppressing noise and redundancy.
 		
 		\item BiMamba models temporal dependencies from both forward and backward perspectives using state-space modeling, thereby capturing richer contextual dynamics:
-		$$h_{i}^{\rightarrow}=g_{i}\otimes \text{SSM}_{\rightarrow}(\sigma(\text{Conv1D}_{\rightarrow}(W_{i}^{h}h_{i}+b_{i}^{h})))\in\R^{L^{\prime}\times C_{i}^{\prime}}$$
-		$$h_{i}^{\leftarrow}=g_{i}\otimes \text{SSM}_{\leftarrow}(\sigma(\text{Conv1D}_{\leftarrow}(\text{Rev}_{t}(W_{i}^{h}h_{i}+b_{i}^{h}))))\in\R^{L^{\prime}\times C_{i}^{\prime}}$$
+		$$h_{i}^{\rightarrow}=g_{i}\otimes \text{SSM}_{\rightarrow}(\sigma(\text{DWConv1D}_{\rightarrow}(W_{i}^{h}\bar{h}_{i}+b_{i}^{h})))\in\R^{L^{\prime}\times C^{\prime}}$$
+		$$h_{i}^{\leftarrow}=g_{i}\otimes \text{Rev}_{t}\Bigl(\text{SSM}_{\leftarrow}(\sigma(\text{DWConv1D}_{\leftarrow}(\text{Rev}_{t}(W_{i}^{h}\bar{h}_{i}+b_{i}^{h}))))\Bigr)\in\R^{L^{\prime}\times C^{\prime}}$$
 		where $h_{i}^{\rightarrow}$ and $h_{i}^{\leftarrow}$ are the feature representations of the $i$-th modality in forward and backward modeling. $\text{Rev}_{t}(\cdot)$ denotes flipping along the time dimension $L^{\prime}$.
 		
-		The operator $\otimes$ denotes the Hadamard product (element-wise multiplication), which explains why the dimensions remain strictly unchanged, unlike a direct sum ($\oplus$) or tensor product. $W_{i}^{h}$ represents the weight matrix and $b_{i}^{h}$ represents the bias. 
+		Note that the time reversal is applied to the backward SSM output \emph{before} gating, so that the gate $g_i$ - which is computed once, in forward time order - modulates the feature belonging to the same time step $t$ in both branches. Applying $\text{Rev}_t$ after gating would instead pair the gate at step $t$ with the feature at step $L'-t$, misaligning the two.
 		
-		$\text{SSM}(\cdot)$ represents the Selective State Space Model. Formally, it maps a 1-dimensional sequence through a continuous linear time-invariant (LTI) system defined by the state equation $x'(t) = A x(t) + B u(t)$ and output $y(t) = C x(t)$. To operate on discrete sequence steps, the continuous transition operator $A$ and input operator $B$ are discretized via a timescale parameter $\Delta$, yielding the discrete operators $\bar{A} = \exp(\Delta A)$ and $\bar{B} = (\Delta A)^{-1}(\bar{A} - I)\Delta B$. 
+		The operator $\otimes$ denotes the Hadamard product (element-wise multiplication), which explains why the dimensions remain strictly unchanged, unlike a tensor product. $W_{i}^{h}$ represents the weight matrix and $b_{i}^{h}$ represents the bias. $\text{DWConv1D}$ denotes a \emph{depthwise} temporal convolution of kernel size $D_C$ (one filter per channel, i.e.\ \texttt{feature\_group\_count} equal to the channel width), following \cite{gu2023mamba}; this keeps the convolution cost linear in the channel dimension.
 		
+		$\text{SSM}(\cdot)$ represents the Selective State Space Model. Formally, it maps a 1-dimensional sequence through a continuous linear time-invariant (LTI) system defined by the state equation $\xi'(t) = A \xi(t) + B u(t)$ and output $y(t) = C \xi(t)$. To operate on discrete sequence steps, the continuous transition operator $A$ and input operator $B$ are discretized via a timescale parameter $\Delta$. The exact discretisation yields $\bar{A} = \exp(\Delta A)$ and $\bar{B} = (\Delta A)^{-1}(\bar{A} - I)\Delta B$. Following the reference Mamba implementation \cite{gu2023mamba}, we adopt the first-order (Euler) simplification of the input operator,
+		$$\bar{A} = \exp(\Delta A), \qquad \bar{B} \approx \Delta B,$$
+		which is accurate to $O(\Delta^2)$ and avoids the matrix inverse $(\Delta A)^{-1}$.
+		
+		\textbf{Diagonal state transition.} Following \cite{gu2023mamba}, the state-space model is applied independently to each of the $C'$ channels, and the state matrix of every channel is restricted to be \emph{diagonal}. Channel $d$ thus carries $N$ state coordinates evolving under $A^{(d)} = \mathrm{diag}(a_{d,1},\dots,a_{d,N})$, and because a diagonal matrix is fully determined by its diagonal, no $N \times N$ array is ever materialised: the entire parameter collapses to the $C' \times N$ array $A = (a_{d,n})$, one row of $N$ entries per channel. Each entry governs how quickly one state coordinate forgets, which is why we refer to these entries as decay rates. The update is then elementwise rather than a matrix product, costing $O(N)$ per channel per step instead of $O(N^2)$ and storing $C'N$ parameters instead of $C'N^2$. Diagonality is not merely an efficiency measure: it is what allows the recurrence to be evaluated by a parallel scan, as shown below.
+
+		\textbf{Parameterisation of $A$.} The state transition matrix is not learned directly. Instead we learn $\log(-A)$ and recover $$A = -\exp\bigl(A_{\log}\bigr) \in \R^{C' \times N}, \qquad A_{\log} \text{ initialised to } \mathbf{0},$$
+		which constrains $A < 0$ (elementwise). This guarantees $\bar{A} = \exp(\Delta A) \in (0,1)$, so the recurrence is contractive and the hidden state cannot diverge - a stability property that an unconstrained $A$ does not provide. Separate $A_{\log}$ parameters are maintained for the forward and backward directions.
+		
+
 		Unlike traditional LTI systems, Mamba introduces \textit{selection} by making the discretized parameters $(\bar{B}, C, \Delta)$ functions of the input $u_t$. Specifically:
 		$$ \Delta_t = \text{softplus}(s_{\Delta} + \text{Linear}(u_t)) $$
 		$$ B_t = \text{Linear}(u_t), \quad C_t = \text{Linear}(u_t) $$
-		where $ \text{softplus}(x) = \ln(1 + e^x) \text{ and } s_{\Delta} \in \mathbb{R}^{D} $ is a learned, input-independent bias term that defines the baseline timescale of the system. The inclusion of $s_{\Delta}$ within the \textit{softplus} function ensures that the resulting $\Delta_t$ remains strictly positive, which is required for the stability of the discretization. This selection mechanism allows the discrete transition $x_t = \bar{A}_t x_{t-1} + \bar{B}_t u_t$ to dynamically adjust its temporal resolution - effectively allowing the model to "reset" its state or focus on transient patterns based on the specific content of the sequence $u_t$.
+		where $ \text{softplus}(x) = \ln(1 + e^x) \text{ and } s_{\Delta} \in \mathbb{R}^{C'} $ is a learned, input-independent bias term that defines the baseline timescale of the system. The inclusion of $s_{\Delta}$ within the \textit{softplus} function ensures that the resulting $\Delta_t$ remains strictly positive, which is required for the stability of the discretization. This selection mechanism allows the discrete transition $\xi_t = \bar{A}_t \xi_{t-1} + \bar{B}_t u_t$ to dynamically adjust its temporal resolution. The projections producing $B_t$ and $C_t$ are bias-free.
 		
-		\item BiMamba applies a linear projection and a  \hypertarget{residual}{\textcolor{red}{residual connection}} to integrate bidirectional features and stabilize training:
-		$$u_{i}=h_{i}+\left(W_{i}^{o}\left(\frac{h_{i}^{\rightarrow}+\text{Rev}_{t}(h_{i}^{\leftarrow})}{2}\right)+b_{i}^{o}\right)\in\R^{L^{\prime}\times C_{i}^{\prime}}$$
-		which is the output of the intra-modal BiMamba module for the $i$-th modality. $W_{i}^{o}$ is the weight matrix, and $b_{i}^{o}$ is the bias.
+    	    \textbf{Parallel evaluation via associative scan.} The quantity that must be computed is the discrete state recurrence introduced above, $$\xi_t = \bar{A}_t \odot \xi_{t-1} + \bar{B}_t u_t, \qquad t = 1,\dots,L', \qquad \xi_0 = \mathbf{0},$$
+	    The final output of the block (the intra-modal BiMamba module) is then calculated by combining the hidden state with the selective output operator using the equation $y_t = \sum_{n=1}^{N} C_{t,n}\,\xi_{t,n}$.
+	    Evaluated naively this is a loop: $\xi_t$ cannot be formed until $\xi_{t-1}$ exists, so the $L'$ steps are strictly serial. The math for each step is very simple (just a multiply-add operation on a $C' \times N$ array), so calculating it one step at a time wastes GPU time on just starting the tasks and leaves the hardware mostly idle. For a sequence of $L' = 250$, this means waiting to sequentially launch 250 separate tasks for an amount of work the GPU could otherwise process almost instantly. Ultimately, the step-by-step dependency is what slows the process down, not the calculations themselves.
+		
+	Two structural facts make a parallel evaluation possible. First, because $A$ is \emph{diagonal} in the state dimension, the update does not mix state coordinates: the vector recurrence decomposes into $B \times C' \times N$ mutually independent \emph{scalar} recurrences, one per (batch, channel, state) triple, all sharing the same structure. Second, each such scalar recurrence is an \emph{affine} map of the previous state. Write the step-$t$ update as the function
+	$$f_t : \R \to \R, \qquad f_t(\xi) = a_t\,\xi + b_t, \qquad a_t := \bar{A}_t,\quad b_t := \bar{B}_t u_t,$$
+	so that unrolling from $\xi_0 = 0$ gives $\xi_t = (f_t \circ f_{t-1} \circ \dots \circ f_1)(0)$. The state at time $t$ is therefore nothing more than the composition of the first $t$ update maps, evaluated at zero - and computing \emph{every} prefix of a sequence under some combining operation is precisely what a \emph{scan} (or prefix computation) does. The archetypal example is the prefix sum, which turns $(x_1, \dots, x_n)$ into $(x_1,\ x_1 + x_2,\ \dots)$; a scan generalises this to any binary operator $\oplus$.
+		
+	The reason this buys anything is that a scan under an \emph{associative} $\oplus$ need not be computed left to right. Associativity means partial results may be regrouped freely, so the sequence can be reduced pairwise in a balanced binary tree: total work stays $O(L')$, but the \emph{sequential depth} - the length of the longest chain of dependent operations - falls from $O(L')$ to $O(\log L')$. For $L' = 250$ that is roughly $8$ dependent stages instead of $250$, each stage saturating the device with independent work.
+		
+	\textit{Closure and the composition rule.} To scan over the update maps we must be able to represent a composed map by a finite parameter set. Affine maps in one variable are closed under composition, and the family is parameterised by exactly two numbers - a multiplier and an offset - which is why the scan carries \emph{pairs} rather than scalars. Explicitly, for $i < j$,
+	$$(f_j \circ f_i)(\xi) = f_j\bigl(f_i(\xi)\bigr) = a_j\bigl(a_i \xi + b_i\bigr) + b_j = \underbrace{(a_j a_i)}_{\text{new multiplier}}\,\xi + \underbrace{(a_j b_i + b_j)}_{\text{new offset}}.$$
+	The composite is again affine, so identifying each map with its parameter pair $(a,b)$ induces the binary operator
+	$$(a_i, b_i) \oplus (a_j, b_j) := (a_j a_i,\; a_j b_i + b_j), \qquad i < j,$$
+	where the left operand is the earlier segment of the sequence. Intuitively the two components accumulate different things: the multiplier is the running product of decay factors, recording how much of the initial state survives, while the offset is the running total of inputs, each discounted by all the decay factors applied after it entered.
+		
+	\textit{Associativity.} The operator inherits associativity from function composition, but it is worth verifying directly on the parameters. Expanding the two groupings,
+	$$\bigl[(a_i,b_i) \oplus (a_j,b_j)\bigr] \oplus (a_k,b_k) = (a_j a_i,\ a_j b_i + b_j) \oplus (a_k,b_k) = \bigl(a_k a_j a_i,\ a_k a_j b_i + a_k b_j + b_k\bigr),$$
+	$$(a_i,b_i) \oplus \bigl[(a_j,b_j) \oplus (a_k,b_k)\bigr] = (a_i,b_i) \oplus (a_k a_j,\ a_k b_j + b_k) = \bigl(a_k a_j a_i,\ a_k a_j b_i + a_k b_j + b_k\bigr),$$
+	which agree componentwise. Together with the identity element $(1, 0)$ - the identity map $\xi \mapsto \xi$ - the parameter pairs form a monoid under $\oplus$, which is exactly the algebraic structure a scan requires. Note that $\oplus$ is \emph{not} commutative: $(a_j a_i, a_j b_i + b_j) \neq (a_i a_j, a_i b_j + b_i)$ in general, reflecting the obvious fact that reordering the timesteps changes the trajectory. This costs us nothing, since a scan requires associativity but never commutativity.
+		
+	Running the scan over $\bigl((a_1,b_1),\dots,(a_{L'},b_{L'})\bigr)$ yields at position $t$ the pair representing $f_t \circ \dots \circ f_1$; because $\xi_0 = 0$ the multiplier component annihilates and the state is read off directly from the offset component, $\xi_t = a_{t}\cdots a_1 \cdot 0 + (\text{offset}) = (\text{offset})$.
+		
+	\textit{Implementation.} JAX exposes this primitive as \texttt{jax.lax.associative\_scan(fn, elems, axis)}, where \texttt{fn} implements $\oplus$ on a pair of PyTrees and is required (not merely assumed) to be associative. We supply the tuple $(\bar{A},\, \bar{B} \odot u)$, both of shape $(L', B, C', N)$ after moving the sequence axis to the front, and scan along \texttt{axis=0}; the operator is applied elementwise, so the $B \times C' \times N$ independent recurrences are resolved simultaneously in a single call. The same routine serves the inter-modal block unchanged, where the scanned axis is the modality-channel sequence of length $MC'$ rather than time.
+		
+		Finally, the log-space parameterisation of $A$ interacts favourably with the scan. Since $\bar{A}_t = \exp(\Delta_t A) \in (0,1)$, the cumulative multipliers $a_t \cdots a_1$ form a decreasing product and cannot overflow, no matter how long the sequence; the worst case is underflow to zero, which is the gentle behaviour of a state that has simply forgotten its distant past. An unconstrained $A$ permitting $|\bar{A}| > 1$ would instead make these partial products grow geometrically in the sequence length, and the tree-structured reduction would surface that divergence just as surely as a serial loop would.
+
+	\item BiMamba applies a linear projection and a \hypertarget{residual}{\textcolor{red}{residual connection}} to integrate bidirectional features and stabilize training:
+	$$u_{i}=h_{i}+\left(W_{i}^{o}\left(\frac{h_{i}^{\rightarrow}+h_{i}^{\leftarrow}}{2}\right)+b_{i}^{o}\right)\in\R^{L^{\prime}\times C^{\prime}}$$
+	which is the output of the intra-modal BiMamba module for the $i$-th modality. $W_{i}^{o}$ is the weight matrix, and $b_{i}^{o}$ is the bias. Observe that the residual carries the \emph{unnormalised} $h_i$, not $\bar{h}_i$: the layer normalisation of step 1 conditions the block's internal computation without rescaling the identity path.
 	\end{enumerate}
 	
 	\subsubsection{Inter-modal BiMamba Module}
 	Relying solely on intra-modal modeling neglects inter-modal correlations that are crucial for comprehensive multimodal understanding. Let the concatenation along the channel dimension be denoted by the operator $\circ$. We define the concatenated intermediate matrix $U$:
 	$$U = u_1 \circ u_2 \circ \dots \circ u_M$$
-	where $U \in \R^{L^{\prime} \times \sum_{i=1}^{M} C_i^{\prime}}$. To enable state-space modeling across the modalities rather than the temporal space, we transpose this matrix:
-	$$m = U^{\top} = \text{Transpose}(u_1 \circ u_2 \circ \dots \circ u_M) \in \R^{(\sum C_i^{\prime}) \times L^{\prime}}$$
+	where $U \in \R^{L^{\prime} \times MC^{\prime}}$, all modalities having been projected to the common width $C'$. To enable state-space modeling across the modalities rather than the temporal space, we transpose this matrix:
+	$$m = U^{\top} = \text{Transpose}(u_1 \circ u_2 \circ \dots \circ u_M) \in \R^{MC^{\prime} \times L^{\prime}}$$
 	Thus, each time step acts structurally as a "channel," while the concatenated modality dimension serves as the sequence length. We then input $m$ into a BiMamba structure:
-	$$ H = \text{BiMamba}(m) \in \R^{\sum_{i=1}^{M} C_i^{\prime} \times L^{\prime}} $$ By performing bidirectional state modeling along the fused $\sum_{i=1}^{M} C_i^{\prime}$ axis, the sequence transition operators effectively treat preceding modalities as the context basis for subsequent modalities.
+	$$ H = \text{BiMamba}(m) \in \R^{MC^{\prime} \times L^{\prime}} $$ By performing bidirectional state modeling along the fused $MC^{\prime}$ axis, the sequence transition operators effectively treat preceding modalities as the context basis for subsequent modalities.
 	
-	The function $H = \text{BiMamba}(m)$ represents the application of the entire bidirectional Mamba block (All 1--3 steps of the intra-modal module above) to the fused matrix $m$. In this inter-modal stage, the "sequence length" is now the total number of concatenated channels $\sum C_i^{\prime}$, and the "features" at each step are the temporal points $L^{\prime}$. This allows the model to build a context where the state of one modality can directly influence the hidden state of another.
+	The function $H = \text{BiMamba}(m)$ represents the application of the entire bidirectional Mamba block (All steps 1--4 of the intra-modal module above, including the pre-normalisation) to the fused matrix $m$. In this inter-modal stage, the "sequence length" is now the total number of concatenated channels $MC^{\prime}$, and the "features" at each step are the temporal points $L^{\prime}$. This allows the model to build a context where the state of one modality can directly influence the hidden state of another.
 	
 	In the forward process, the hidden states built from modalities $\{1, \dots, i- 1 \}$, while in the backward process the hidden states derived from the modalities $\{M, M - 1, \dots, i + 1\}$ provide additional temporal information for the $i$-th modality.
 	
@@ -79,7 +152,12 @@
 	\subsection{Beta Regression Framework}
 	To respect the support $\mathcal{Y} \in [0, 1]$, we model the predictive distribution using a \textbf{Beta distribution}:
 	$$ p(y|\alpha, \beta) = \frac{y^{\alpha-1}(1-y)^{\beta-1}}{B(\alpha, \beta)}, \quad B(\alpha, \beta) = \frac{\Gamma(\alpha)\Gamma(\beta)}{\Gamma(\alpha+\beta)} $$
-	The network outputs these parameters via a softplus activation: $\alpha = \text{softplus}(z_\alpha) + 1$ and $\beta = \text{softplus}(z_\beta) + 1$. The $+1$ offset ensures the distribution remains unimodal ($\alpha, \beta > 1$). 
+	
+	\textbf{Head architecture.} Each Beta head is a two-layer perceptron rather than a bare linear read-out. Let $r \in \R^{L' \times d_{\text{in}}}$ denote the representation entering the head, where $d_{\text{in}}$ is its channel width. The head first maps $r$ through one hidden layer, $$ v = \sigma\bigl(W^{(1)} r + b^{(1)}\bigr) \in \R^{L' \times d_h}, $$ where the superscript $(1)$ indexes the first (and only) hidden layer: $W^{(1)} \in \R^{d_h \times d_{\text{in}}}$ is its weight matrix and $b^{(1)} \in \R^{d_h}$ its bias, $\sigma$ is the SiLU activation, and $d_h$ is the head width. The hidden activation $v$ is then read out by two separate linear layers, one per shape parameter:
+	$$ z_\alpha = W^{(\alpha)} v + b^{(\alpha)}, \qquad z_\beta = W^{(\beta)} v + b^{(\beta)}, \qquad W^{(\alpha)}, W^{(\beta)} \in \R^{1 \times d_h}$$
+	Both read-outs consume the \emph{same} $v$: the hidden layer extracts one shared intermediate feature from which the two shape parameters are then predicted independently. This lets $\alpha$ and $\beta$ draw on common structure - both describe the same predictive distribution - while still being free to move in opposite directions, which is what allows the head to represent "high mean, low variance" and "high mean, high variance" as distinct outputs.
+
+	The network outputs the shape parameters via a softplus activation: $\alpha = \text{softplus}(z_\alpha) + 1$ and $\beta = \text{softplus}(z_\beta) + 1$. The $+1$ offset ensures the distribution remains unimodal ($\alpha, \beta > 1$), which also bounds the density away from the divergent behaviour that arises as $\alpha, \beta \to 0^+$.
 	
 	The predictive mean $\hat{\mu}$ and aleatoric uncertainty $\text{Var}[y]$ are:
 	$$ \hat{\mu} = \frac{\alpha}{\alpha + \beta}, \quad \text{Var}[y] = \frac{\alpha\beta}{(\alpha+\beta)^2(\alpha+\beta+1)} $$
@@ -87,14 +165,20 @@
 	$$ \lim_{\hat{\mu} \to 0} \text{Var}[y] = 0 \quad \text{and} \quad \lim_{\hat{\mu} \to 1} \text{Var}[y] = 0 $$
 	This provides a principled measure of confidence that scales with the proximity to the interval limits.
 	
+	\textbf{Target clipping.} Taking the logarithm of the Beta density above gives $$\ln p(y \mid \alpha,\beta) = (\alpha-1)\ln y + (\beta-1)\ln(1-y) - \ln B(\alpha,\beta),$$ so the log-likelihood contains the terms $\ln y$ and $\ln(1-y)$ explicitly. Both diverge at the endpoints of the support: $\ln y \to -\infty$ as $y \to 0^+$, and $\ln(1-y) \to -\infty$ as $y \to 1^-$. The engagement annotations do attain exactly $0$ and $1$, at which points the expression is undefined and evaluates to \texttt{-inf} or \texttt{NaN} in floating-point arithmetic - a single such frame is enough to corrupt the gradient of the entire batch. Targets are therefore clipped to $[\varepsilon,\, 1-\varepsilon]$ with $\varepsilon = 10^{-6}$ before the likelihood is evaluated. This is a numerical safeguard only: it moves an affected target by $10^{-6}$ on a scale of $[0,1]$, which is four orders of magnitude below the resolution at which human annotators can meaningfully distinguish engagement levels.
+
 	\subsection{Test-Time Adaptation (TTA) and Adaptive Thresholds}
 	
 	Following the differential-entropy principle of the original BiMamba-TTA paper \cite{ziyu2025}, we replace Shannon entropy with a regression-compatible uncertainty proxy.
-	For the Beta predictive distribution $p(y \mid x) = \mathrm{Beta}(\hat{\alpha}(x),\hat{\beta}(x))$ that respects the support $y \in [0,1]$, we define
-	$$
-	U(x) := \mathrm{Var}[y] = \frac{\hat{\alpha}(x)\hat{\beta}(x)}{(\hat{\alpha}(x)+\hat{\beta}(x))^2(\hat{\alpha}(x)+\hat{\beta}(x)+1)}.
-	$$
 	
+	For the Beta predictive distribution $p(y \mid x) = \mathrm{Beta}(\hat{\alpha}(x),\hat{\beta}(x))$ that respects the support $y \in [0,1]$, we define $$ U(x) := \mathrm{Var}[y] = \frac{\hat{\alpha}(x)\hat{\beta}(x)}{(\hat{\alpha}(x)+\hat{\beta}(x))^2(\hat{\alpha}(x)+\hat{\beta}(x)+1)} $$
+    
+	\textbf{What $U(x)$ is, intuitively.} In the original BiMamba-TTA formulation \cite{ziyu2025}, $U(x)$ is the model's own admission of how unsure it is about the sample $x$. Test data carries no labels, so the model cannot know which of its predictions are correct; $U(x)$ is the next best thing, a self-assessment used to decide which unlabelled frames are trustworthy enough to learn from. Low $U(x)$ means the predictive distribution is sharply peaked - the model is committing to an answer - and such frames make safe pseudo-labels. High $U(x)$ means the distribution is spread out and the prediction is close to a guess; adapting on those would teach the model its own noise.
+
+	\textbf{Why variance.} For classification, $U(x)$ is the Shannon entropy of the softmax output, a direct measure of how spread the predicted distribution is. Regression has no softmax, so the natural generalisation is the differential entropy $H(p)$ of the predictive density - but for a Beta distribution $H(p)$ requires the log-Beta function and two digamma evaluations per frame, which is the transcendental cost we are trying to avoid in a real-time streaming filter. 
+
+	The way out is to notice what the filter actually does with $U(x)$. It compares $U(x)$ against a percentile of recently observed values (below), so the only property that matters is the \emph{ordering} it induces over samples. Any function that is a strictly monotonic transform of $H(p)$ therefore selects exactly the same frames as $H(p)$ itself, at whatever cost we like. This reframes the problem from "compute the entropy" to "find the cheapest quantity that ranks samples the same way", and the predictive variance is the obvious first candidate: it is the standard measure of spread, it is already available in closed form from the shape parameters the network emits, and it costs four arithmetic operations. The remainder of this subsection verifies that this candidate does in fact preserve the ordering.
+
 	\subsubsection{Why Predictive Variance is a Strictly Monotonic Proxy for Differential Entropy}
 	
 	This choice is justified because variance is a \emph{strictly monotonic} function of the differential entropy $H(p)$ of the Beta distribution.  
@@ -138,20 +222,18 @@
 	S(x) = \mathbb{I}\Bigl\{ U_{\text{multi}}(x) \leq \gamma_m(t) \;\text{AND}\; \sum_{i=1}^M w_i U_i(x) \geq \gamma_u(t) \Bigr\}.
 	$$
 	
-	To handle non-stationary streaming data (i.e., test-time engagement signals that arrive continuously frame-by-frame and whose statistical distribution drifts over time due to fatigue, cultural differences, sensor drift, or changing speaker roles), the thresholds $\gamma(t)$ are updated adaptively using a moving window of the most recent $K$ samples:
+	To handle non-stationary streaming data (i.e., test-time engagement signals that arrive continuously frame-by-frame and whose statistical distribution drifts over time due to fatigue, cultural differences, sensor drift, etc.), the thresholds $\gamma(t)$ are updated adaptively using a moving window of the most recent $K$ samples:
 	$$
 	\gamma(t) = \mathrm{Percentile}\bigl(\mathcal{U}_t,\, p\bigr), \quad
 	\mathcal{U}_t = \bigl\{U(\tau) \mid \tau \in [t-K,t]\bigr\},
 	$$
-	where $p$ is the percentile rank (e.g., $p=0.8$) that defines the "confidence" cutoff relative to the recent noise floor of the data stream.  
-	Here "non-stationary streaming data" means the incoming test distribution is not fixed but changes gradually; the moving window $\mathcal{U}_t$ tracks this drift in real time.  
-	The "percentile rank $p=0.8$" selects the value below which $80\,\%$ of the recent uncertainties lie, so the threshold automatically adapts to the current level of noise.  
-	The term "confidence cutoff" means that samples with $U_{\text{multi}}(x)$ below this adaptive value are considered sufficiently reliable for adaptation.  
-	The "recent noise floor" refers to the lowest typical uncertainty observed in the immediate past window - using the percentile of this floor makes the threshold robust to gradual changes in signal quality.
-	
+	where $p$ is the percentile rank (e.g., $p=0.8$) that defines the "confidence" cutoff relative to the recent noise floor of the data stream. Here "non-stationary streaming data" means the incoming test distribution is not fixed but changes gradually; the moving window $\mathcal{U}_t$ tracks this drift in real time.  
+
+    The percentile rank $p$ makes the threshold \emph{relative rather than absolute}. A fixed cutoff such as $U(x) \le 0.02$ would be meaningless across domains: a model that is uniformly less certain on Japanese sessions than on English ones would have every frame rejected on one corpus and every frame accepted on the other, purely because its overall uncertainty level shifted. By setting $\gamma(t)$ to the $p$-th percentile of the last $K$ observed uncertainties, "confident" is redefined at each moment to mean \emph{confident by the standards of what this model is currently producing on this stream}, and the filter keeps selecting a stable fraction of frames regardless of the absolute uncertainty level. Percentiles are used rather than the mean and standard deviation because they are order statistics and therefore insensitive to the occasional extreme value - a few corrupted frames shift a percentile barely at all, whereas they can move a mean arbitrarily far.
+
 	\subsection{Uncertainty Estimation Methods}
 	
-	Uncertainty is formally quantified as the variance of the predictive distribution. We utilize three complementary methods that together capture both aleatoric and epistemic uncertainty. All three are expressed in terms of the Beta predictive distribution $p(y \mid x) = \mathrm{Beta}(\hat{\alpha}(x),\hat{\beta}(x))$.
+	Uncertainty is formally quantified as the variance of the predictive distribution. We describe three complementary methods that together capture both aleatoric and epistemic uncertainty. All three are expressed in terms of the Beta predictive distribution $p(y \mid x) = \mathrm{Beta}(\hat{\alpha}(x),\hat{\beta}(x))$. \textcolor{red}{Of these, only the first is realised in the current implementation; methods 2 and 3 require stochastic regularisation that the present architecture does not contain (see the remark at the end of this subsection).}
 	
 	\begin{enumerate}
 		\item \textbf{Parametric Beta (Aleatoric Uncertainty):}  
@@ -159,7 +241,7 @@
 		$$
 		U(x) = \mathrm{Var}[y] = \frac{\hat{\alpha}(x)\hat{\beta}(x)}{(\hat{\alpha}(x)+\hat{\beta}(x))^2(\hat{\alpha}(x)+\hat{\beta}(x)+1)}.
 		$$
-		Because the variance is computed analytically from the learned shape parameters, it is the fastest and default choice for the TTA filter.
+		Because the variance is computed analytically from the learned shape parameters, it is the fastest and default choice for the TTA filter, and it is the quantity actually used by the implemented selection rule $S(x)$.
 		
 		\item \textbf{Monte Carlo Dropout (Epistemic Uncertainty):}  
 		We keep dropout active at inference and draw $T$ stochastic forward passes (typically $T=10$--$20$). For each pass $t$ we obtain a Beta distribution with parameters $(\hat{\alpha}^{(t)},\hat{\beta}^{(t)})$ and corresponding mean $\displaystyle \hat{\mu}^{(t)} = \frac{\hat{\alpha}^{(t)}}{\hat{\alpha}^{(t)}+\hat{\beta}^{(t)}}$.  
@@ -179,6 +261,18 @@
 	\end{enumerate}
 	
 	Note that the symbol $U(x)$ in the TTA filter always refers to one of the three quantities above (most often the parametric Beta variance for speed or the hybrid total variance when epistemic information is needed). The law of total variance guarantees that $U_{\text{total}}$ is the correct variance of the mixture distribution induced by MC dropout.
+	
+	\textcolor{red}{\textbf{Implementation status.} The current architecture contains no dropout layers, so methods 2 and 3 cannot be evaluated as written: with deterministic weights, every one of the $T$ forward passes returns the identical Beta distribution and $U_{\text{epi}} \equiv 0$. Realising them requires inserting dropout into the Beta heads (and optionally the BiMamba projections) and retaining it at inference. Until then, methods 2 and 3 should be read as a planned extension rather than a component of the reported system.}
+	
+	\subsection{Training Objective}
+	
+	Training minimises the Beta negative log-likelihood of the fused multimodal head, augmented by a deep-supervision term applied to every unimodal head:
+	$$
+	\mathcal{L}_{\text{train}} = \mathcal{L}_{\text{NLL}}\bigl(\alpha,\beta,\,y\bigr) \;+\; \lambda_u \sum_{i=1}^{M} \mathcal{L}_{\text{NLL}}\bigl(\alpha_i,\beta_i,\,y\bigr), \qquad \lambda_u = 0.5 .
+	$$
+	Each unimodal head is trained against the same ground-truth engagement target as the fused head. The purpose is twofold: it forces every modality branch to remain individually predictive rather than collapsing into an arbitrary feature basis for the fusion stage, and it produces the calibrated per-modality distributions that the test-time adaptation objective (Section 2.6) consumes as students.
+	
+	\textcolor{red}{Note on term balance: with $M = 8$ role-feature pairs and $\lambda_u = 0.5$, the auxiliary terms contribute $8 \times 0.5 = 4$ times the weight of the multimodal term, so the gradient is dominated by the unimodal branches. Whether this is the intended balance - and whether $\lambda_u$ should be annealed towards zero as training progresses - is currently under investigation, since only the multimodal head is used at evaluation time.}
 	
 	\subsection{Test-Time Loss Derivations}
 	
@@ -202,10 +296,11 @@
 	
 	We only update specific surgical layers to prevent catastrophic forgetting:
 	\begin{itemize}
-		\item \textbf{BatchNorm layers:} These encode per-channel activation statistics, allowing for immediate adaptation to domain shifts.
+		\item \textbf{BatchNorm layers:} These encode per-channel activation statistics, allowing for immediate adaptation to domain shifts. In EngageNet these are the $\text{BN}$ stages inside every InitEncoder.
 		\item \textbf{First convolution in InitEncoder:} Re-calibrates low-level feature extraction (e.g., sensor noise) before temporal/modal mixing.
-		\item \textbf{First FC layer in Inter-modal BiMamba:} Recalibrates cross-modal fusion (e.g., adjusting the weight of audio vs. visual cues for different cultures).
+		\item \textbf{First FC layer in Inter-modal BiMamba:} Recalibrates cross-modal fusion (e.g., adjusting the weight of audio vs. visual cues for different cultures). Concretely this is the first dense projection inside the cross-modal BiMamba block.
 	\end{itemize}
+	Gradients are masked so that all remaining parameters receive exactly zero update.
 	
 	This surgical approach mitigates the \textbf{Variance Starvation Problem (VSP)}. In VSP, a model minimises the Beta NLL by artificially inflating $\mathrm{Var}[y]$ (i.e., reducing the concentration $\kappa = \hat{\alpha}+\hat{\beta}$) on hard samples; the gradient to the mean head then vanishes because the loss term becomes insensitive to prediction error. By freezing the majority of the backbone and updating only the listed surgical layers, we force the model to improve genuine feature alignment rather than using uncertainty as a "slack variable" to bypass difficult data.
 	
@@ -243,9 +338,9 @@
 	
 	\subsection{The Order-Sensitivity Problem}
 	
-	Recall from Section 1.2.2 that the inter-modal BiMamba module processes the transposed concatenation
-	$$m = \text{Transpose}(u_1 \circ u_2 \circ \dots \circ u_M) \in \R^{(\sum_{i=1}^{M} C_i') \times L'},$$
-	treating the fused channel axis as a sequence of length $\sum C_i'$, with each modality's channels occupying a contiguous block. The ordering of these blocks - audio before video, or video before pose - is chosen arbitrarily by the practitioner; no prior knowledge assigns a canonical rank to distinct measurement modalities. We show that this arbitrariness introduces a structural bias, because selective state-space models are inherently order-sensitive.
+	Recall from Section 1.3.2 that the inter-modal BiMamba module processes the transposed concatenation
+	$$m = \text{Transpose}(u_1 \circ u_2 \circ \dots \circ u_M) \in \R^{MC' \times L'},$$
+	treating the fused channel axis as a sequence of length $MC'$, with each modality's channels occupying a contiguous block. The ordering of these blocks - audio before video, or video before pose - is chosen arbitrarily by the practitioner; no prior knowledge assigns a canonical rank to distinct measurement modalities. We show that this arbitrariness introduces a structural bias, because selective state-space models are inherently order-sensitive.
 	
 	Let $\xi_k \in \R^{L'}$ denote the SSM hidden state at sequence position $k$, and let $s_k \in \R^{L'}$ be the input at that position (corresponding to the channel block of the $k$-th modality in $m$). The Mamba selective SSM \cite{gu2023mamba} defines the recurrence
 	$$\xi_k = \bar{A}_k(s_k)\,\xi_{k-1} + \bar{B}_k(s_k)\,s_k, \qquad y_k = C_k(s_k)\,\xi_k,$$
@@ -261,8 +356,8 @@
 	$$y_2 - y_2' = C\bar{B}(\bar{A} - I)(u_1 - u_2).$$
 	This vanishes for all $u_1 \neq u_2$ only if $\bar{A} = I$, which degenerates the SSM to a memoryless map and eliminates all temporal memory - contradicting the purpose of state-space modelling. In the selective Mamba SSM, the input-dependent operators $\bar{A}_k(s_k)$ and $\bar{B}_k(s_k)$ introduce additional asymmetric cross-terms that further break permutation symmetry. $\square$
 	
-	Bidirectionality alone does not resolve the problem. In the backward pass, $\text{Rev}_t(h^{\leftarrow})$ reverses along the \emph{temporal} axis $L'$, not along the modality-sequence axis $\sum C_i'$. The backward SSM still processes modality blocks in the order $M, M{-}1, \dots, 1$; each modality's backward hidden state therefore accumulates context from those that follow it in the reversed sequence. The averaged representation
-	$$H = \frac{h^{\rightarrow} + \text{Rev}_t(h^{\leftarrow})}{2}$$
+	Bidirectionality alone does not resolve the problem. In the backward pass, $\text{Rev}_t(\cdot)$ reverses along the \emph{temporal} axis $L'$, not along the modality-sequence axis $MC'$. The backward SSM still processes modality blocks in the order $M, M{-}1, \dots, 1$; each modality's backward hidden state therefore accumulates context from those that follow it in the reversed sequence. The averaged representation
+	$$H = \frac{h^{\rightarrow} + h^{\leftarrow}}{2}$$
 	remains order-dependent: both the forward and backward context seen by modality $i$ change qualitatively with its position in the arbitrary concatenation, so the same physical modality receives a structurally different representation depending solely on where it was placed in $m$.
 	
 	\subsection{Differentiable Modality Ordering via Gumbel-Sinkhorn}
@@ -270,15 +365,17 @@
 	We replace the fixed concatenation order with a \emph{learned, input-dependent permutation} computed differentiably via the Gumbel-Sinkhorn operator \cite{mena2018}. The key intuition is that the optimal ordering is itself a function of the data: for a sample in which audio is uninformative, placing it first in the forward SSM pass deposits unreliable context into the hidden states of all subsequent modalities, whereas placing it last confines the contamination to the final position.
 	
 	\subsubsection*{Uniform channel projection}
-	Different InitEncoders naturally produce output representations of different widths: for instance, an audio encoder may output $C_{\text{audio}}' = 64$ channels while a video encoder outputs $C_{\text{video}}' = 256$ channels. These \emph{heterogeneous dimensions} prevent treating the modality outputs as interchangeable objects of the same type, which is a prerequisite for learning a permutation over them. To resolve this, a modality-specific affine map $f_i : \R^{C_i'} \to \R^{C'}$, defined by $f_i(v) = W_i^{\text{proj}} v + b_i^{\text{proj}}$ with $W_i^{\text{proj}} \in \R^{C' \times C_i'}$ and $b_i^{\text{proj}} \in \R^{C'}$, is appended to each InitEncoder to linearly project its output into a shared embedding space of dimension $C'$. After this projection, $u_i \in \R^{L' \times C'}$ for all $i \in \{1,\dots,M\}$. The matrix $U$ is then the concatenation of these uniformly-dimensioned representations along the channel axis: $U = u_1 \circ u_2 \circ \dots \circ u_M \in \R^{L' \times MC'}$, where each $u_i$ contributes exactly $C'$ columns.
+	Different InitEncoders naturally produce output representations of different widths: for instance, an audio encoder may output $C_{\text{audio}}' = 64$ channels while a video encoder outputs $C_{\text{video}}' = 256$ channels. These \emph{heterogeneous dimensions} prevent treating the modality outputs as interchangeable objects of the same type, which is a prerequisite for learning a permutation over them. To resolve this, a modality-specific affine map $f_i : \R^{C_i'} \to \R^{C'}$, defined by $f_i(v) = W_i^{\text{proj}} v + b_i^{\text{proj}}$ with $W_i^{\text{proj}} \in \R^{C' \times C_i'}$ and $b_i^{\text{proj}} \in \R^{C'}$, is appended to each InitEncoder to linearly project its output into a shared embedding space of dimension $C'$. After this projection, $u_i \in \R^{L' \times C'}$ for all $i \in \{1,\dots,M\}$. The matrix $U$ is then the concatenation of these uniformly-dimensioned representations along the channel axis: $U = u_1 \circ u_2 \circ \dots \circ u_M \in \R^{L' \times MC'}$, where each $u_i$ contributes exactly $C'$ columns. As with the encoders themselves, the projection is shared between the expert and novice streams of a given feature type.
 	
 	\subsubsection*{Score matrix}
 	A \emph{meta-network} $\phi$ is a small auxiliary network whose sole purpose is to predict how modalities should be ordered, operating on top of the main feature representations without participating in the primary task of engagement prediction. Concretely, $\phi$ maps the set $\{u_i\}_{i=1}^M$ to an $M \times M$ assignment \emph{score} matrix $Z \in \R^{M \times M}$, where the entry $Z_{ij}$ quantifies the fitness of placing modality $j$ at sequence position $i$ in the inter-modal BiMamba: a large value of $Z_{ij}$ means the meta-network believes modality $j$ should be processed at step $i$. Each modality representation is first summarised by temporal mean-pooling:
 	$$\bar{u}_i = \frac{1}{L'}\sum_{t=1}^{L'} u_i^{(t)} \in \R^{C'}.$$
-	Two asymmetric projections into a score-embedding space of dimension $d_s$ then produce query and key vectors:
-	$$q_i = W_Q\,\bar{u}_i + b_Q \in \R^{d_s}, \qquad k_j = W_K\,\bar{u}_j + b_K \in \R^{d_s},$$
-	where $W_Q, W_K \in \R^{d_s \times C'}$ and $b_Q, b_K \in \R^{d_s}$ are learnable parameters shared across modalities. The score is then computed as a scaled dot product:
-	$$Z_{ij} = \frac{q_i^\top k_j}{\sqrt{d_s}}.$$
+	Two asymmetric bias-free projections into a score-embedding space of dimension $d_s$ then produce query and key vectors:
+	$$q_i = W_Q\,\bar{u}_i \in \R^{d_s}, \qquad k_j = W_K\,\bar{u}_j \in \R^{d_s},$$
+	where $W_Q, W_K \in \R^{d_s \times C'}$ are learnable parameters shared across modalities. The score is the dot product
+	$$Z_{ij} = q_i^\top k_j .$$
+	\textcolor{red}{Remark: the conventional scaled variant $Z_{ij} = q_i^\top k_j / \sqrt{d_s}$ is \emph{not} currently applied. Because $Z$ is subsequently divided by the annealing temperature $\tau$, an unscaled score of large magnitude has the same effect as a small $\tau$, which drives the Sinkhorn output towards a hard permutation before the annealing schedule intends it to. Introducing the $1/\sqrt{d_s}$ factor is an open item.}
+	
 	The asymmetry of the query-key factorisation is intentional: it allows the model to distinguish between a modality acting as a \emph{context supplier} (the key role) and a modality acting as a \emph{context receiver} (the query role), and assigns independent scores to each direction. A symmetric formulation $Z_{ij} = z_i^\top z_j$ would force $Z = Z^\top$, which in turn constrains the learned permutation matrix $P$ to be symmetric. The only symmetric permutation matrices are \emph{involutions} - permutations that are their own inverse ($\pi = \pi^{-1}$), corresponding to products of disjoint transpositions (swaps). This would unnecessarily halve the space of learnable orderings, excluding, for example, cyclic permutations of three or more modalities.
 	
 	\subsubsection*{Gumbel perturbation}
@@ -286,33 +383,54 @@
 	$$f(x) = \frac{1}{\beta} e^{-(x-\mu)/\beta} e^{-e^{-(x-\mu)/\beta}}$$ 
 	In deep learning, the Gumbel-Max trick \cite{jang2017} leverages this distribution to draw discrete samples from a categorical distribution in a fully differentiable manner. By adding independent Gumbel noise to unnormalized log-probabilities (scores), the deterministic argmax of these perturbed values becomes mathematically equivalent to drawing a sample from the true underlying multinomial distribution. 
 	
-	To generate standard Gumbel noise ($\mu=0, \beta=1$) programmatically, we apply inverse transform sampling. This technique maps a standard uniform random variable to a target distribution by passing it through the inverse of that target's cumulative distribution function (CDF). Given that the standard Gumbel CDF is $F(x) = e^{-e^{-x}}$, setting a uniform random variable $U \sim \mathrm{Uniform}(0,1)$ equal to $F(x)$ and solving explicitly for $x$ yields the inverse mapping $x = -\ln(-\ln U)$. Thus, to enable stochastic exploration of orderings during training, the score matrix $Z$ is perturbed with i.i.d.\ standard Gumbel noise and scaled by a temperature parameter $\tau > 0$:
+	To generate standard Gumbel noise ($\mu=0, \beta=1$) programmatically, we apply inverse transform sampling. This technique maps a standard uniform random variable to a target distribution by passing it through the inverse of that target's cumulative distribution function (CDF). Given that the standard Gumbel CDF is $F(x) = e^{-e^{-x}}$, setting a uniform random variable $U \sim \mathrm{Uniform}(0,1)$ equal to $F(x)$ and solving explicitly for $x$ yields the inverse mapping $x = -\ln(-\ln U)$. In practice $U$ is drawn from the open interval $(\epsilon, 1-\epsilon)$ with $\epsilon = 10^{-6}$, since the double logarithm diverges at both endpoints. Thus, to enable stochastic exploration of orderings during training, the score matrix $Z$ is perturbed with i.i.d.\ standard Gumbel noise and scaled by a temperature parameter $\tau > 0$:
 	$$\tilde{Z}_{ij} = \frac{Z_{ij} + G_{ij}}{\tau}, \qquad G_{ij} = -\ln(-\ln U_{ij}), \quad U_{ij} \overset{\text{i.i.d.}}{\sim} \mathrm{Uniform}(0,1).$$
-	The temperature $\tau$ is annealed over the course of training to progressively concentrate probability mass towards a single hard permutation. We adopt a standard exponential decay schedule, updating the temperature at each epoch $t$ via $\tau_t = \max(\tau_\infty, \tau_0 \cdot \gamma^t)$, where $\gamma \in (0, 1)$ represents the decay rate, starting from an initial exploration temperature $\tau_0$ (e.g., $1.0$) down to a tight categorical approximation threshold $\tau_\infty$ (e.g., $0.05$).
+	The temperature $\tau$ is annealed over the course of training to progressively concentrate probability mass towards a single hard permutation. We adopt a standard exponential decay schedule, updating the temperature at each epoch $t$ via $\tau_t = \max(\tau_\infty, \tau_0 \cdot \gamma^t)$, where $\gamma \in (0, 1)$ represents the decay rate, starting from an initial exploration temperature $\tau_0$ down to a tight categorical approximation threshold $\tau_\infty$. Concrete values are listed in Section 5.
 	
 	\subsubsection*{Sinkhorn normalisation}
 	The \textbf{Birkhoff-von Neumann theorem} \cite{birkhoff1946} establishes that the set of doubly-stochastic matrices (square matrices with non-negative real entries whose rows and columns each sum to exactly $1$) constitutes a convex polytope whose extreme points are precisely the set of discrete permutation matrices. Geometrically, a convex polytope is a bounded, multi-dimensional solid defined by flat facets, and its extreme points represent its absolute vertices. Because any interior point of a convex polytope can be expressed uniquely as a convex combination (a weighted average) of its vertices, any doubly-stochastic matrix can be decomposed into a convex combination of hard permutation matrices. This structural property makes the Birkhoff polytope a mathematically principled continuous relaxation of discrete permutations.
 	
 	A standard Softmax operator is insufficient in this context because it operates independently across a single dimension, ensuring only that the rows sum to $1$ (yielding a row-stochastic matrix). In an inter-modal fusion framework where rows represent sequence positions and columns map to distinct modalities, a row-stochastic matrix introduces severe structural redundancies. It permits multiple sequence positions to concurrently assign high probability mass to the exact same dominant modality column (such as audio), which causes the network to attend to duplicate representations while completely suppressing and ignoring other available modalities. 
 	
-	Constraining both rows and columns to sum to $1$ eliminates this issue by enforcing a strict continuous one-to-one assignment map. Following \cite{mena2018}, we obtain a valid doubly stochastic matrix $P$ by applying the iterative Sinkhorn-Knopp algorithm directly to the elementwise exponential of the perturbed score matrix:
-	$$P = \text{Sinkhorn}\bigl(\exp(\tilde{Z})\bigr).$$
-	The Sinkhorn-Knopp algorithm achieves normalisation by alternating between row and column scaling operations. Because the exponential map $\exp(\tilde{Z})$ guarantees that all initial entries are strictly positive ($>0$), the resulting row and column sums are bounded strictly away from zero. This structural guarantee completely eliminates the risk of numerical division-by-zero errors (NaN), ensuring that the iterative scaling steps remain entirely smooth and differentiable. Consequently, the gradient operator $\displaystyle \frac{\partial P}{\partial Z}$ remains mathematically well-conditioned throughout optimization, enabling robust, end-to-end backpropagation of the latent modal ordering.
+	Constraining both rows and columns to sum to $1$ eliminates this issue by enforcing a strict continuous one-to-one assignment map. Following \cite{mena2018}, the doubly-stochastic matrix $P$ is obtained by the iterative Sinkhorn-Knopp algorithm, which alternates row and column normalisation of $\exp(\tilde{Z})$ until convergence.
 	
+	\textbf{Log-domain implementation.} We do \emph{not} evaluate $\exp(\tilde{Z})$ explicitly. With real feature magnitudes the unscaled scores $Z_{ij}$ reach $10^{4}$--$10^{5}$, so $\exp(\tilde{Z})$ overflows to $+\infty$ in single precision; the subsequent row normalisation then computes $\infty/\infty$ and returns NaN, which propagates through the entire network and destroys training. We therefore carry out the alternating normalisation entirely in log-space.
+	
+	The operation that replaces division is the \emph{log-sum-exp}, defined for a finite set of reals
+	$\{x_1,\dots,x_n\}$ as
+	$$\operatorname*{logsumexp}_{j} x_j \;:=\; \log \sum_{j=1}^{n} \exp(x_j),$$
+	that is, the logarithm of the sum of the exponentials. Its role here follows from a single identity. If a set of quantities is held in logarithmic form, $x_j = \log p_j$, then normalising them to sum to one, $p_j \mapsto p_j / \sum_{j'} p_{j'}$, becomes in logarithms
+	$$\log\!\left(\frac{p_j}{\sum_{j'} p_{j'}}\right) = \log p_j - \log \sum_{j'} p_{j'} = x_j -
+	\operatorname*{logsumexp}_{j'} x_{j'} .$$
+	A normalisation is therefore a \emph{subtraction} in log-space, never a division, and the sums themselves are never formed. Crucially, log-sum-exp is evaluated by first factoring out the largest element, $m = \max_j x_j$,
+	$$\operatorname*{logsumexp}_{j} x_j = m + \log \sum_{j} \exp(x_j - m),$$
+	which is algebraically exact and guarantees every exponential argument is non-positive, so no term can exceed $1$ and overflow cannot occur regardless of how large the $x_j$ become.
+	
+	Writing $\log Q^{(k)}$ for the matrix obtained after the row pass of iteration $k$, and $\log P^{(k+1)}$ for the result after the subsequent column pass, the scheme is
+	$$ \log P^{(0)} = \tilde{Z}, $$
+	$$ \log Q^{(k)}_{ij} = \log P^{(k)}_{ij} - \operatorname*{logsumexp}_{j'} \log P^{(k)}_{ij'},
+	\qquad
+	\log P^{(k+1)}_{ij} = \log Q^{(k)}_{ij} - \operatorname*{logsumexp}_{i'} \log Q^{(k)}_{i'j}, $$
+	for $k = 0,\dots,n_{\text{iter}}-1$, with $P = \exp\bigl(\log P^{(n_{\text{iter}})}\bigr)$ returned only at the end. The first update normalises each row (the inner index runs over columns $j'$), the second normalises each column (the inner index runs over rows $i'$); $Q^{(k)}$ is simply the intermediate that is row-stochastic but not yet column-stochastic, and it is discarded once the column pass consumes it. Alternating the two passes is what drives the matrix towards satisfying both constraints at once.
+	
+	This is algebraically identical to Sinkhorn-Knopp on $\exp(\tilde{Z})$ - each step divides by a row or column sum, which by the identity above is a subtraction of its logarithm - but the largest intermediate quantity is $\max_j \tilde{Z}_{ij}$ rather than $\exp(\max_j \tilde{Z}_{ij})$. The exponential map is applied once, at the end, to values that are by construction non-positive log-probabilities, so the returned entries lie in $(0,1]$ and the gradient operator $\partial P / \partial Z$ remains well-conditioned throughout optimisation.
+
 	\subsubsection*{Soft reordering}
 	With $P$ computed as above, the permuted representation for position $i$ is the $P$-weighted convex combination of all intra-modal outputs. Concretely, the $i$-th row of $P$, denoted $P_{i\cdot} = (P_{i1}, \dots, P_{iM})$, defines a probability distribution over the $M$ modalities; since $P$ is doubly-stochastic, we have $P_{ij} \geq 0$ and $\sum_j P_{ij} = 1$ for every $i$. The soft assignment is then:
 	$$\tilde{u}_i = \sum_{j=1}^{M} P_{ij}\,u_j \in \R^{L' \times C'}, \qquad i \in \{1,\dots,M\}.$$
 	The entry $P_{ij} \in [0,1]$ is the soft probability that modality $j$ is assigned to position $i$ in the inter-modal sequence; when $P$ is close to a hard permutation matrix (as happens after temperature annealing), exactly one $P_{ij}$ per row will be close to 1 and the rest close to 0, recovering a near-discrete assignment. The fixed concatenation $m$ is replaced by
 	$$\tilde{m} = \text{Transpose}(\tilde{u}_1 \circ \tilde{u}_2 \circ \dots \circ \tilde{u}_M) \in \R^{MC' \times L'},$$
-	and the inter-modal BiMamba operates on $\tilde{m}$ instead of $m$; all equations in Section 1.2.2 remain unchanged under this substitution.
+	and the inter-modal BiMamba operates on $\tilde{m}$ instead of $m$; all equations in Section 1.3.2 remain unchanged under this substitution. Note that $P$ is computed per sample: the ordering is input-dependent, so different sessions may resolve to different modality orderings.
 	
 	\subsubsection*{Inference}
-	At test time, Gumbel noise is suppressed ($G_{ij} = 0$). If a hard permutation is required (e.g.\ for latency-critical deployment), the optimal discrete assignment is recovered by solving the linear assignment problem over the score matrix $Z$:
+	At test time, Gumbel noise is suppressed ($G_{ij} = 0$), so the permutation becomes a deterministic function of the input; the soft doubly-stochastic $P$ is used directly for the reordering.
+	
+	\textcolor{red}{The following hard-assignment variant is described for completeness but is not part of the current implementation.} If a hard permutation is required (e.g.\ for latency-critical deployment), the optimal discrete assignment is recovered by solving the linear assignment problem over the score matrix $Z$:
 	$$\pi^* = \arg\min_{\pi \in S_M} \sum_{i=1}^{M} \bigl(-Z_{i,\pi(i)}\bigr),$$
 	where $S_M$ denotes the symmetric group - the set of all $M!$ bijections from $\{1,\dots,M\}$ to itself, i.e.\ all possible orderings of the $M$ modalities. This minimisation is solved by applying the Hungarian algorithm to $-Z$ in $O(M^3)$ time, which is negligible for the small modality counts typical in multimodal sensing.
 	
 	\subsubsection*{Equivariance guarantee}
-	Let $\rho \in S_M$ be applied to the inputs before the meta-network. Because $Z_{ij}$ is computed from the data via the shared query-key projections, relabelling the inputs by $\rho$ relabels the rows and columns of $Z$ by $\rho$ as well, and consequently the recovered hard permutation transforms as $\pi^*_\rho = \rho \circ \pi^*$. The permuted sequence fed to the inter-modal BiMamba is therefore the same physical ordering of modalities regardless of how the practitioner originally numbered them. Consequently, the fused representation $H = \text{BiMamba}(\tilde{m})$ is invariant to the practitioner's arbitrary choice of concatenation order, provided the model has converged to a stable optimal ordering $\pi^*$.
+	Let $\rho \in S_M$ be applied to the inputs before the meta-network. Because $Z_{ij}$ is computed from the data via the shared query-key projections, relabelling the inputs by $\rho$ relabels the rows and columns of $Z$ by $\rho$ as well, and consequently the recovered hard permutation transforms as $\pi^*_\rho = \rho \circ \pi^*$. The permuted sequence fed to the inter-modal BiMamba is therefore the same physical ordering of modalities regardless of how the practitioner originally numbered them. Consequently, the fused representation $H = \text{BiMamba}(\tilde{m})$ is invariant to the practitioner's arbitrary choice of concatenation order, provided the model has converged to a stable optimal ordering $\pi^*$. \textcolor{red}{This guarantee is stated for the hard-assignment variant; under the soft doubly-stochastic $P$ actually used, the corresponding statement is approximate and becomes exact only in the low-temperature limit $\tau \to 0$, where $P$ converges to a permutation matrix.}
 	
 	\section{Evaluation}
 
@@ -323,17 +441,81 @@
 	$$
 	where $\rho$ is the Pearson correlation between predictions $\hat{y}$ and targets $y$, $\sigma_{\hat{y}}, \sigma_y$ are their standard deviations, and $\mu_{\hat{y}}, \mu_y$ are their means. CCC $\in [-1, 1]$, with $1$ indicating perfect concordance. Unlike Pearson correlation alone, CCC penalises both scale and location shifts.
 
-	The combined CCC across $N$ engagement dimensions is computed as:
+	Following the challenge protocol \cite{withanage25}, the headline score is the \textbf{unweighted mean CCC across the four held-out test sets} - NoXi, NoXi+J, NoXi (Additional Languages), and MPIIGroupInteraction:
 	$$
-	\text{CCC}_{\text{combined}} = \frac{1}{N}\sum_{n=1}^{N} \text{CCC}_n.
+	\text{CCC}_{\text{combined}} = \frac{1}{4}\sum_{d \in \mathcal{D}} \text{CCC}_d, \qquad \mathcal{D} = \{\text{NoXi},\ \text{NoXi+J},\ \text{NoXi-Add},\ \text{MPIIGI}\}.
 	$$
+	Because the mean is unweighted, a domain on which the model transfers poorly is not offset by strong in-domain performance elsewhere; cross-domain robustness is therefore weighted as heavily as in-domain accuracy.
 
-	\subsection{Compound Demographic Disparity (CDD)}
-	To quantify fairness across demographic groups, we adopt the Compound Demographic Disparity:
+	\subsection{Conditional Demographic Disparity (CDD)}
+	To quantify fairness across demographic groups we adopt the Conditional Demographic Disparity \cite{wachter2021, withanage25}, which asks whether, \emph{at the same ground-truth engagement level}, the model systematically over- or under-predicts for one group relative to another. Conditioning on $y$ is what distinguishes CDD from a raw demographic-parity gap: it separates genuine model bias from legitimate differences in the underlying engagement distributions of the groups.
+	
+	For gender,
 	$$
-	\text{CDD} = \frac{1}{|G|}\sum_{g \in G} \bigl| \text{CCC}_g - \text{CCC}_{\text{all}} \bigr|,
+	\text{CDD}_G = \mathbb{E}\bigl[\hat{y} \,\big|\, \text{male},\, y\bigr] - \mathbb{E}\bigl[\hat{y} \,\big|\, \text{female},\, y\bigr],
 	$$
-	where $G$ is the set of demographic groups (e.g., gender or language subgroups), $\text{CCC}_g$ is the metric restricted to group $g$, and $\text{CCC}_{\text{all}}$ is the overall metric. Lower CDD indicates more equitable performance across groups.
+	where positive values indicate higher predictions for males than for females at the same $y$, and negative values the reverse. For language, each language $L$ is compared against the pooled expectation across all languages at the same $y$:
+	$$
+	\text{CDD}_L = \mathbb{E}\bigl[\hat{y} \,\big|\, L,\, y\bigr] - \mathbb{E}\bigl[\hat{y} \,\big|\, y\bigr].
+	$$
+	
+	Both quantities are \textbf{signed} and centred at $0$; values closer to zero indicate smaller disparity, and the sign indicates the direction of the bias. This is a substantive difference from an absolute-value formulation: the sign carries the information about \emph{which} group is favoured, and averaging absolute values across groups would discard it.
+	
+	\textbf{Estimation.} Since $y$ is continuous, the conditional expectations are approximated by binning the ground truth into $n_b$ equal-frequency (quantile) bins and averaging the within-bin group differences, weighted by bin prevalence:
+	$$
+	\widehat{\text{CDD}} = \frac{\sum_{b=1}^{n_b} |\mathcal{B}_b| \cdot \bigl(\bar{\hat{y}}^{\,A}_b - \bar{\hat{y}}^{\,B}_b\bigr)}{\sum_{b=1}^{n_b} |\mathcal{B}_b|},
+	$$
+	where $\mathcal{B}_b$ is the set of frames whose target falls in bin $b$, and $\bar{\hat{y}}^{\,A}_b, \bar{\hat{y}}^{\,B}_b$ are the mean predictions of the two groups within that bin. Bins in which either group is unrepresented are skipped, since no comparison is defined there. We use $n_b = 10$.
+	
+	\textbf{Applicability.} $\text{CDD}_G$ requires exactly two gender codes to be present in the evaluated split, and $\text{CDD}_L$ requires at least two languages; where a split does not satisfy these conditions the corresponding metric is undefined and is reported as such rather than as zero. Note also that the sign of $\text{CDD}_G$ depends on which annotation code denotes male, which must be resolved against the corpus metadata; the magnitude is invariant to this choice. We acknowledge, following \cite{withanage25}, that gender is not binary; the corpora provide only male/female self-identifications.
+
+	\section{Hyperparameters}
+	
+	The following values define the reference configuration. All are exposed as command-line overrides.
+	
+	\begin{center}
+	\begin{tabular}{llr}
+		\toprule
+		\textbf{Symbol} & \textbf{Description} & \textbf{Value} \\
+		\midrule
+		\multicolumn{3}{l}{\textit{Data}} \\
+		$L$ & Window length (frames; $10$ s at $25$ Hz) & $250$ \\
+		-- & Active feature types $|\mathcal{F}|$ (core subset) & $4$ \\
+		$M$ & Role-feature pairs $= 2|\mathcal{F}|$ & $8$ \\
+		$\varepsilon$ & Target clipping bound & $10^{-6}$ \\
+		\midrule
+		\multicolumn{3}{l}{\textit{Architecture}} \\
+		$C'$ & Shared channel width after projection & $128$ \\
+		$N$ & SSM state dimension & $16$ \\
+		$D_C$ & Depthwise convolution kernel size & $4$ \\
+		$d_h$ & Beta head hidden width & $128$ \\
+		-- & Total parameters (core subset) & $\approx 7.2$M \\
+		\midrule
+		\multicolumn{3}{l}{\textit{Gumbel-Sinkhorn}} \\
+		$d_s$ & Query/key projection dimension & $64$ \\
+		$n_{\text{iter}}$ & Sinkhorn normalisation iterations & $20$ \\
+		$\tau_0$ & Initial temperature & $1.0$ \\
+		$\tau_\infty$ & Minimum temperature & $0.1$ \\
+		$\gamma$ & Temperature decay rate per epoch & $0.95$ \\
+		\midrule
+		\multicolumn{3}{l}{\textit{Optimisation}} \\
+		$\eta$ & Learning rate (Adam) & $10^{-3}$ \\
+		$\lambda_u$ & Unimodal deep-supervision weight & $0.5$ \\
+		-- & Batch size & $8$ \\
+		-- & Maximum epochs & $50$ \\
+		-- & Early-stopping patience (epochs, on val CCC) & $10$ \\
+		\midrule
+		\multicolumn{3}{l}{\textit{Test-time adaptation}} \\
+		$\lambda$ & Pseudo-label supervision weight in $\mathcal{L}_{TTA}$ & $1.0$ \\
+		$p$ & Percentile rank for adaptive thresholds & $0.8$ \\
+		\midrule
+		\multicolumn{3}{l}{\textit{Evaluation}} \\
+		$n_b$ & Ground-truth bins for CDD estimation & $10$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+	
+	\textcolor{red}{The learning rate $\eta = 10^{-3}$ is the current default but is under review: a full run at this rate reached its best validation CCC at epoch 2 and then flattened for ten consecutive epochs until early stopping, while the training loss continued to fall - the signature of steps that are too large once input standardisation permits gradients to propagate properly. Lower values ($5\times10^{-4}$ and below) are being evaluated.}
 
 	\newpage
 	\begin{thebibliography}{9}
@@ -376,6 +558,24 @@
 
 		\bibitem{lin1989ccc}
 		Lawrence I-Kuei Lin, \emph{A Concordance Correlation Coefficient to Evaluate Reproducibility}, Biometrics, 45(1), 255--268 (1989).
+		
+		\bibitem{withanage25}
+		Daksitha Withanage Don, Marius Funk, Michal Balazia, Huajian Qiu, Shogo Okada, Fran\c{c}ois Br\'{e}mond, Jan Alexandersson, Andreas Bulling, Elisabeth Andr\'{e}, and Philipp M\"{u}ller, \emph{MultiMediate '25: Cross-cultural Multi-domain Engagement Estimation}, Proceedings of the 33rd ACM International Conference on Multimedia (MM '25), 14150--14155 (2025). doi:10.1145/3746027.3762076.
+		
+		\bibitem{wachter2021}
+		Sandra Wachter, Brent Mittelstadt, and Chris Russell, \emph{Why fairness cannot be automated: Bridging the gap between EU non-discrimination law and AI}, Computer Law and Security Review, 41, 105567 (2021). doi:10.1016/j.clsr.2021.105567.
+		
+		\bibitem{ba2016layernorm}
+		Jimmy Lei Ba, Jamie Ryan Kiros, and Geoffrey E. Hinton, \emph{Layer Normalization}, arXiv preprint arXiv:1607.06450 (2016).
+		
+		\bibitem{ioffe2015batchnorm}
+		Sergey Ioffe and Christian Szegedy, \emph{Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift}, International Conference on Machine Learning (ICML 2015), 448--456.
+		
+		\bibitem{cafaro2017noxi}
+		Angelo Cafaro, Johannes Wagner, Tobias Baur, Soumia Dermouche, Mercedes Torres Torres, Catherine Pelachaud, Elisabeth Andr\'{e}, and Michel F. Valstar, \emph{The NoXi Database: Multimodal Recordings of Mediated Novice-Expert Interactions}, Proceedings of the 19th ACM International Conference on Multimodal Interaction, 350--359 (2017). doi:10.1145/3136755.3136780.
+		
+		\bibitem{funk2024noxij}
+		Marius Funk, Shogo Okada, and Elisabeth Andr\'{e}, \emph{Multilingual Dyadic Interaction Corpus NoXi+J: Toward Understanding Asian-European Non-verbal Cultural Characteristics and their Influences on Engagement}, Proceedings of the ACM International Conference on Multimodal Interaction, 224--233 (2024). doi:10.1145/3678957.3685757.
 	\end{thebibliography}
 	
 \end{document}
