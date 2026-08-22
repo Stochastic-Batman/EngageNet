@@ -91,7 +91,14 @@
 
 		\textbf{Parameterisation of $A$.} The state transition matrix is not learned directly. Instead we learn $\log(-A)$ and recover $$A = -\exp\bigl(A_{\log}\bigr) \in \R^{C' \times N}, \qquad A_{\log} \text{ initialised to } \mathbf{0},$$
 		which constrains $A < 0$ (elementwise). This guarantees $\bar{A} = \exp(\Delta A) \in (0,1)$, so the recurrence is contractive and the hidden state cannot diverge - a stability property that an unconstrained $A$ does not provide. Separate $A_{\log}$ parameters are maintained for the forward and backward directions.
-		
+
+		\textbf{Temporal receptive field.} The decay rate and the timestep jointly determine how current input can influence future output. Consider the following recurrence: $$\xi_t = \bar{A}\,\xi_{t-1} + b_t, \qquad b_t := \bar{B}_t u_t,$$ which is \emph{first-order}: the state at step $t$ is determined solely by the previous state $\xi_{t-1}$ and the current input alone, with no explicit dependence on $\xi_{t-2}$ or earlier. Suppose the input does not exist after step $t_0$ ($u_t = 0 \implies b_t = 0$) for $t > t_0$. Unrolling from $\xi_{t_0}$,
+		$$\xi_{t_0+1} = \bar{A} \, \xi_{t_0}, \qquad \xi_{t_0+2} = \bar{A}^2 \xi_{t_0}, \qquad \dots, \qquad \xi_{t_0+k} = \bar{A}^{\,k}\,\xi_{t_0}.$$
+		Since $\bar{A} = \exp(\Delta A) \in (0,1)$, the retained state shrinks geometrically; $\bar{A}$ is called the \emph{decay} factor. Equivalently, and this is the reading we need, the influence of an input entering at step $t_0$ on the state $k$ steps later carries the weight $\bar{A}^{\,k}$: this is exactly the accumulated multiplier that appears in the associative scan derivation below. The \emph{memory} of the block is the profile of these weights, and its \emph{effective memory} $\tau_{\text{eff}}$ is the conventional single-number summary - the number of steps after which the weight has fallen to $e^{-1}$ of its initial value. This $e^{-1}$ convention is the standard definition of the time constant of an exponentially decaying response in linear systems theory \cite{oppenheim1997}, and we adopt it unchanged. Solving $$ \bar{A}^{\,\tau_{\text{eff}}} = e^{-1} \implies \tau_{\text{eff}}\,\ln \bar{A} = -1 \implies \tau_{\text{eff}} = \frac{-1}{\ln \bar{A}},$$ and substituting $\ln\bar{A} = \Delta A = -\Delta|A|$ (recall $A<0$ by construction), $$\boxed{\ \tau_{\text{eff}} = \frac{1}{\Delta\,|A|}\ } $$ measured in units of encoder output steps.
+
+		\textbf{Why the initialisation matters.} Initialising $A_{\log} = \mathbf{0}$ and $s_\Delta = \mathbf{0}$ gives $|A| = \exp(0) = 1$ and, since the input-dependent projection contributes negligibly at initialisation, $\Delta \approx \text{softplus}(0) = \ln 2 \approx 0.693$. Hence $$\tau_{\text{eff}} = \frac{1}{0.693 \times 1} \approx 1.44 \ \text{steps}$$ The output sequence retains the input rate of $25$ Hz and one step spans $1/25 \ \text{s} = 40 \ \text{ms}$; the receptive field is therefore $$1.44 \times 40\,\text{ms} \approx 58\,\text{ms}$$ A uniform $A_{\log}$ compounds the difficulty: every one of the $N$ state coordinates then carries the same decay rate, so the state dimension supplies $N$ copies of a single timescale rather than a spread of them, entirely defeating the purpose of $N > 1$.
+
+		\textbf{S4D-Real initialisation.} We therefore adopt the real-valued diagonal initialisation of \cite{gu2022s4d}, used in the reference Mamba implementation \cite{gu2023mamba}: setting $$A_{\log}[d, n] = \ln(n+1) \quad \rightarrow \quad a_{d,n} = -(n+1), \qquad n = 0,\dots, N-1,$$ gives each channel a geometric ladder of decay rates rather than a single one. The timestep bias is initialised so that $\Delta$ is log-uniform on $[\Delta_{\min},\Delta_{\max}] = [10^{-3}, 10^{-1}]$, obtained by inverting the softplus, $$s_\Delta = \ln \left(e^{\Delta} - 1\right),$$ which is the exact inverse since $\text{softplus}(s_\Delta) = \ln(1+e^{s_\Delta}) = \Delta$. The resulting receptive fields $\tau_{\text{eff}} = \frac{1}{\Delta|A|}$ span from a fraction of a step to of order $10^3$ steps - tens of seconds at $25$ Hz - allowing the selection mechanism to choose an integration horizon per channel and per input rather than beginning pinned to a single very short one.
 
 		Unlike traditional LTI systems, Mamba introduces \textit{selection} by making the discretized parameters $(\bar{B}, C, \Delta)$ functions of the input $u_t$. Specifically:
 		$$ \Delta_t = \text{softplus}(s_{\Delta} + \text{Linear}(u_t)) $$
@@ -129,20 +136,36 @@
 	$$u_{i}=h_{i}+\left(W_{i}^{o}\left(\frac{h_{i}^{\rightarrow}+h_{i}^{\leftarrow}}{2}\right)+b_{i}^{o}\right)\in\R^{L^{\prime}\times C^{\prime}}$$
 	which is the output of the intra-modal BiMamba module for the $i$-th modality. $W_{i}^{o}$ is the weight matrix, and $b_{i}^{o}$ is the bias. Observe that the residual carries the \emph{unnormalised} $h_i$, not $\bar{h}_i$: the layer normalisation of step 1 conditions the block's internal computation without rescaling the identity path.
 	\end{enumerate}
-	
+
 	\subsubsection{Inter-modal BiMamba Module}
-	Relying solely on intra-modal modeling neglects inter-modal correlations that are crucial for comprehensive multimodal understanding. Let the concatenation along the channel dimension be denoted by the operator $\circ$. We define the concatenated intermediate matrix $U$:
-	$$U = u_1 \circ u_2 \circ \dots \circ u_M$$
-	where $U \in \R^{L^{\prime} \times MC^{\prime}}$, all modalities having been projected to the common width $C'$. To enable state-space modeling across the modalities rather than the temporal space, we transpose this matrix:
-	$$m = U^{\top} = \text{Transpose}(u_1 \circ u_2 \circ \dots \circ u_M) \in \R^{MC^{\prime} \times L^{\prime}}$$
-	Thus, each time step acts structurally as a "channel," while the concatenated modality dimension serves as the sequence length. We then input $m$ into a BiMamba structure:
-	$$ H = \text{BiMamba}(m) \in \R^{MC^{\prime} \times L^{\prime}} $$ By performing bidirectional state modeling along the fused $MC^{\prime}$ axis, the sequence transition operators effectively treat preceding modalities as the context basis for subsequent modalities.
+	Relying solely on intra-modal modeling neglects inter-modal correlations that are obviously important for comprehensive multimodal understanding. The intra-modal stage yields $M$ representations $u_i \in \R^{L' \times C'}$ of common width, and the fusion stage must let them exchange information. How that exchange is arranged - specifically, which axis the state-space model treats as its sequence - determines both what the fusion can express and whether the learned modality ordering of Section 3 has any effect at all. We first record why two natural arrangements are unsatisfactory, then give the one we adopt.
+
+	\textbf{Arrangement (i): concatenate along channels, scan over time.} Form $$U^{(t)} = u_1^{(t)} \circ u_2^{(t)} \circ \dots \circ u_M^{(t)} \in \R^{MC'},$$ where $\circ$ denotes concatenation and $u_i^{(t)} \in \R^{C'}$ is the $i$-th modality's representation at time $t$, and apply the BiMamba block along the time axis with feature width $D = MC'$. Modalities then interact only through the block's dense projections $W \in \R^{MC' \times MC'}$, which mix all channels of all modalities at every time step. The fusion is expressive but structurally unconstrained, and it has two problems.
+
+	First, any custom reordering of the input modalities becomes useless. Because the reordering operation happens right before a dense layer (a linear weight matrix), the network simply absorbs the fixed rearrangement directly into its weight calculations without changing the model's capabilities. The only benefit comes from making the reordering dynamic (input-dependent), but even then, it creates a soft blend of modalities rather than a true sequential order. This defeats the original goal of learning an ordering, which relies on processing the modalities step-by-step.
 	
-	The function $H = \text{BiMamba}(m)$ represents the application of the entire bidirectional Mamba block (All steps 1--4 of the intra-modal module above, including the pre-normalisation) to the fused matrix $m$. In this inter-modal stage, the "sequence length" is now the total number of concatenated channels $MC^{\prime}$, and the "features" at each step are the temporal points $L^{\prime}$. This allows the model to build a context where the state of one modality can directly influence the hidden state of another.
+	Formally, let $P \in \R^{M \times M}$ be the reordering matrix of Section 3.2 and let $P \otimes I_{C'}$ denote its Kronecker product with the $C' \times C'$ identity - the block matrix that permutes whole modality blocks while acting as the identity within each block's channels. Reordering before the dense projection then gives $W(P \otimes I_{C'})U^{(t)} = W'U^{(t)}$ with $W' := W(P \otimes I_{C'})$, so for any fixed $P$ the reordered model computes exactly what the unreordered model computes with weights $W'$: the two are the same model class, and the permutation is unlearnable because it is already absorbed.
 	
-	In the forward process, the hidden states built from modalities $\{1, \dots, i- 1 \}$, while in the backward process the hidden states derived from the modalities $\{M, M - 1, \dots, i + 1\}$ provide additional temporal information for the $i$-th modality.
+	Second, the parameter count grows quadratically with the number of modalities ($M$). Combining all modalities into a single wide feature dimension causes the fusion layer to require roughly $M^2$ times as many parameters. This makes the fusion stage take up most of the network's capacity, which easily leads to severe overfitting on smaller datasets containing only a few dozen sessions.
+
+	\textbf{Arrangement (ii): concatenate along channels, scan over the concatenated axis.} A second approach treats the combined index as the sequence, scanning over all $MC'$ positions so each modality forms a block of $C'$ steps. This fails due to an information bottleneck, which becomes clear when we unroll the recurrence over the scan index $k$: 
+	$$\xi_k = \bar{A}_k\,\xi_{k-1} + b_k, \qquad b_k := \bar{B}_k s_k, \qquad \xi_0 = \mathbf{0},$$ where $k$ is the position, $s_k$ is the input, $\xi_k$ is the hidden state, $\bar{A}_k$ is the decay factor, and $\bar{B}_k$ is the input operator. Unrolling this step-by-step gives:  
+	$$\begin{aligned} \xi_1 &= \bar{A}_1 \cdot \mathbf{0} + b_1 = b_1, \\ \xi_2 &= \bar{A}_2 \xi_1 + b_2 = \bar{A}_2 b_1 + b_2, \\ \xi_3 &= \bar{A}_3 \xi_2 + b_3 = \bar{A}_3\bar{A}_2 b_1 + \bar{A}_3 b_2 + b_3, \\ & \vdots \\ \xi_k &= \sum_{k'=1}^{k}\left(\prod_{l=k'+1}^{k}\bar{A}_l\right) b_{k'}, \end{aligned}$$
+	with an empty product equaling $1$. The term $\prod_{l=k'+1}^{k}\bar{A}_l$ is the weight applied to past inputs; to calculate this, you must multiply the retention factors for every step between the past input $k'$ and the current position $k$. At the start of training, the model's ability to dynamically change this factor based on input is weak, so the decay factor stays close to a constant baseline, $\bar{A}$. Because it is roughly constant, multiplying it for every step in the gap simplifies to $\bar{A}$ raised to the power of the distance between positions:   
+	$$\prod_{l=k'+1}^{k}\bar{A}_l \approx \bar{A}^{\,k-k'}$$ Under this arrangement, one modality is separated from the next by $C'$ steps, so the information passed between them shrinks by a factor of $\bar{A}^{\,C'}$. Since $\bar{A}$ is a fraction, raising it to a large power like $C'$ shrinks the surviving information to practically zero. To successfully pass information across this gap, the network would have to push $\bar{A}$ incredibly close to $1$. However, doing so stops the memory from fading, causing the block to lose its ability to distinguish different positions along the sequence. Furthermore, the gradient signal needed to increase $\bar{A}$ is blocked by this exact same bottleneck.  
+
+	\textbf{Arrangement (iii), adopted: scan over the modality axis.} Both of the previous problems are solved if we treat the list of modalities itself as the sequence. Instead of a single modality taking up $C'$ steps, it now takes up exactly one position. First, we stack the dynamically reordered modality outputs into a new shape: $$\tilde{\mathcal{U}} \in \R^{M \times L' \times C'}, \qquad \tilde{\mathcal{U}}_i = \tilde{u}_i,$$ where $\tilde{u}_i = \sum_{j=1}^{M} P_{ij} u_j$. At every individual time step $t$, the model processes a sequence of $M$ vectors, $\bigl(\tilde{u}_1^{(t)}, \dots, \tilde{u}_M^{(t)}\bigr)$, each with a size of $C'$. The BiMamba block is then applied directly across this sequence of modalities: $$H^{(t)} = \text{BiMamba}_{\text{modality}} \bigl(\tilde{u}_1^{(t)}, \dots, \tilde{u}_M^{(t)}\bigr) \in \R^{M \times C'}, \qquad t = 1,\dots,L'.$$
 	
-	\section{Engagement Regression Adaptation}
+	This is calculated independently for each time step using the same shared weights. The job of understanding time is left entirely to a previous part of the network.
+
+	Because modalities are now sitting directly next to each other in the sequence, the memory decay between them is only $\bar{A}$ instead of the massive $\bar{A}^{\,C'}$ bottleneck. This allows information to flow easily between them, no matter what decay rate the model learns. When scanning forward, modality $i$ gathers context from the modalities placed before it, $\{1,\dots,i-1\}$. When scanning backward, it gathers context from the modalities placed after it, $\{M,\dots,i+1\}$. Averaging these two directions guarantees that every modality can "see" all the others.
+
+	This setup fixes the core issues in two major ways: \begin{itemize}
+	    \item \textbf{The sorting mechanism works:} Because the fusion process is now sensitive to order, the learned permutation actively decides which modalities give context to which. This effect can no longer be bypassed or absorbed by standard network weights.
+	    \item \textbf{Efficiency gains:} The feature width shrinks to $C'$, which drops the parameter cost from a heavy $\Theta(M^2C'^2)$ down to just $\Theta(C'^2)$. Additionally, the depth of the dependent math operations (the associative scan) drops from $\lceil\log_2 L'\rceil$ to just $\lceil\log_2 M\rceil$, running on a much smaller state.
+	\end{itemize}
+
+	Finally, the output is stitched back together side-by-side to match the expected format for the final prediction heads: $$H^{(t)} = H_1^{(t)} \circ \dots \circ H_M^{(t)} \in \R^{MC'}$$ which returns the data to its original shape of $H \in \R^{L' \times MC'}$.
 	
 	\subsection{Differential Entropy and the Failure of Gaussian Assumptions}
 	To adapt the entropy-based selection mechanism of BiMamba-TTA for continuous engagement regression, we transition from Shannon entropy to \textbf{differential entropy}. For a continuous random variable $y$ with probability density $p(y)$, the differential entropy is defined as:
@@ -338,9 +361,9 @@
 	
 	\subsection{The Order-Sensitivity Problem}
 	
-	Recall from Section 1.3.2 that the inter-modal BiMamba module processes the transposed concatenation
-	$$m = \text{Transpose}(u_1 \circ u_2 \circ \dots \circ u_M) \in \R^{MC' \times L'},$$
-	treating the fused channel axis as a sequence of length $MC'$, with each modality's channels occupying a contiguous block. The ordering of these blocks - audio before video, or video before pose - is chosen arbitrarily by the practitioner; no prior knowledge assigns a canonical rank to distinct measurement modalities. We show that this arbitrariness introduces a structural bias, because selective state-space models are inherently order-sensitive.
+	Recall from Section 1.3.2 that the inter-modal BiMamba module treats modality identity as its sequence axis, processing at each time step the length-$M$ sequence $$\bigl(u_1^{(t)}, u_2^{(t)}, \dots, u_M^{(t)}\bigr), \qquad u_i^{(t)} \in \R^{C'},$$ with each modality contributing exactly one position.
+
+	The ordering of these blocks - audio before video, or video before pose - is chosen arbitrarily by the practitioner; no prior knowledge assigns a canonical rank to distinct measurement modalities. We show that this arbitrariness introduces a structural bias, because selective state-space models are inherently order-sensitive.
 	
 	Let $\xi_k \in \R^{L'}$ denote the SSM hidden state at sequence position $k$, and let $s_k \in \R^{L'}$ be the input at that position (corresponding to the channel block of the $k$-th modality in $m$). The Mamba selective SSM \cite{gu2023mamba} defines the recurrence
 	$$\xi_k = \bar{A}_k(s_k)\,\xi_{k-1} + \bar{B}_k(s_k)\,s_k, \qquad y_k = C_k(s_k)\,\xi_k,$$
@@ -418,9 +441,7 @@
 	\subsubsection*{Soft reordering}
 	With $P$ computed as above, the permuted representation for position $i$ is the $P$-weighted convex combination of all intra-modal outputs. Concretely, the $i$-th row of $P$, denoted $P_{i\cdot} = (P_{i1}, \dots, P_{iM})$, defines a probability distribution over the $M$ modalities; since $P$ is doubly-stochastic, we have $P_{ij} \geq 0$ and $\sum_j P_{ij} = 1$ for every $i$. The soft assignment is then:
 	$$\tilde{u}_i = \sum_{j=1}^{M} P_{ij}\,u_j \in \R^{L' \times C'}, \qquad i \in \{1,\dots,M\}.$$
-	The entry $P_{ij} \in [0,1]$ is the soft probability that modality $j$ is assigned to position $i$ in the inter-modal sequence; when $P$ is close to a hard permutation matrix (as happens after temperature annealing), exactly one $P_{ij}$ per row will be close to 1 and the rest close to 0, recovering a near-discrete assignment. The fixed concatenation $m$ is replaced by
-	$$\tilde{m} = \text{Transpose}(\tilde{u}_1 \circ \tilde{u}_2 \circ \dots \circ \tilde{u}_M) \in \R^{MC' \times L'},$$
-	and the inter-modal BiMamba operates on $\tilde{m}$ instead of $m$; all equations in Section 1.3.2 remain unchanged under this substitution. Note that $P$ is computed per sample: the ordering is input-dependent, so different sessions may resolve to different modality orderings.
+	The entry $P_{ij} \in [0,1]$ is the soft probability that modality $j$ is assigned to position $i$ in the inter-modal sequence; when $P$ is close to a hard permutation matrix (as happens after temperature annealing), exactly one $P_{ij}$ per row will be close to 1 and the rest close to 0, recovering a near-discrete assignment. The stacked representation is accordingly $$\tilde{\mathcal{U}} \in \R^{M \times L' \times C'}, \qquad \tilde{\mathcal{U}}_i = \tilde{u}_i,$$ and the inter-modal BiMamba operates on $\tilde{\mathcal{U}}$ in place of the unpermuted stack; all equations in Section 1.3.2 remain unchanged under this substitution. Note that $P$ is computed per sample: the ordering is input-dependent, so different sessions may resolve to different modality orderings.
 	
 	\subsubsection*{Inference}
 	At test time, Gumbel noise is suppressed ($G_{ij} = 0$), so the permutation becomes a deterministic function of the input; the soft doubly-stochastic $P$ is used directly for the reordering.
@@ -430,7 +451,7 @@
 	where $S_M$ denotes the symmetric group - the set of all $M!$ bijections from $\{1,\dots,M\}$ to itself, i.e.\ all possible orderings of the $M$ modalities. This minimisation is solved by applying the Hungarian algorithm to $-Z$ in $O(M^3)$ time, which is negligible for the small modality counts typical in multimodal sensing.
 	
 	\subsubsection*{Equivariance guarantee}
-	Let $\rho \in S_M$ be applied to the inputs before the meta-network. Because $Z_{ij}$ is computed from the data via the shared query-key projections, relabelling the inputs by $\rho$ relabels the rows and columns of $Z$ by $\rho$ as well, and consequently the recovered hard permutation transforms as $\pi^*_\rho = \rho \circ \pi^*$. The permuted sequence fed to the inter-modal BiMamba is therefore the same physical ordering of modalities regardless of how the practitioner originally numbered them. Consequently, the fused representation $H = \text{BiMamba}(\tilde{m})$ is invariant to the practitioner's arbitrary choice of concatenation order, provided the model has converged to a stable optimal ordering $\pi^*$. \textcolor{red}{This guarantee is stated for the hard-assignment variant; under the soft doubly-stochastic $P$ actually used, the corresponding statement is approximate and becomes exact only in the low-temperature limit $\tau \to 0$, where $P$ converges to a permutation matrix.}
+	Let $\rho \in S_M$ be applied to the inputs before the meta-network. Because $Z_{ij}$ is computed from the data via the shared query-key projections, relabelling the inputs by $\rho$ relabels the rows and columns of $Z$ by $\rho$ as well, and consequently the recovered hard permutation transforms as $\pi^*_\rho = \rho \circ \pi^*$. The permuted sequence fed to the inter-modal BiMamba is therefore the same physical ordering of modalities regardless of how the practitioner originally numbered them. Consequently, the fused representation $H = \text{BiMamba}_{\text{modality}}(\tilde{\mathcal{U}})$ is invariant to the practitioner's arbitrary choice of modality ordering, provided the model has converged to a stable optimal ordering $\pi^*$. \textcolor{red}{This guarantee is stated for the hard-assignment variant; under the soft doubly-stochastic $P$ actually used, the corresponding statement is approximate and becomes exact only in the low-temperature limit $\tau \to 0$, where $P$ converges to a permutation matrix.}
 	
 	\section{Evaluation}
 
@@ -446,6 +467,27 @@
 	\text{CCC}_{\text{combined}} = \frac{1}{4}\sum_{d \in \mathcal{D}} \text{CCC}_d, \qquad \mathcal{D} = \{\text{NoXi},\ \text{NoXi+J},\ \text{NoXi-Add},\ \text{MPIIGI}\}.
 	$$
 	Because the mean is unweighted, a domain on which the model transfers poorly is not offset by strong in-domain performance elsewhere; cross-domain robustness is therefore weighted as heavily as in-domain accuracy.
+
+	\subsubsection*{The correlation ceiling}
+	CCC can be decomposed into two distinct terms: one that measures how well the prediction \emph{orders} the target, and another that measures how well its scale and location \emph{match} the target. Define the scale ratio and the normalised mean offset
+	$$\varphi := \frac{\sigma_{\hat{y}}}{\sigma_y} > 0, \qquad \omega := \frac{\mu_{\hat{y}} - \mu_y}{\sqrt{\sigma_{\hat{y}}\sigma_y}},$$
+	and divide numerator and denominator of the CCC by $\sigma_{\hat{y}}\sigma_y$:
+	$$
+	\frac{2\rho}{\dfrac{\sigma_{\hat{y}}}{\sigma_y} + \dfrac{\sigma_y}{\sigma_{\hat{y}}}
+	+ \dfrac{(\mu_{\hat{y}}-\mu_y)^2}{\sigma_{\hat{y}}\sigma_y}}
+	= \rho \cdot C_b, \qquad
+	C_b := \frac{2}{\varphi + \varphi^{-1} + \omega^{2}} . $$
+	Here $\rho$ is the Pearson correlation, which we term the \emph{precision} of the predictor, and $C_b$ the bias-correction factor, its \emph{accuracy}.
+	
+	\textbf{Proposition.} $\text{CCC}(\hat{y},y) \le \rho$, with equality iff $\sigma_{\hat{y}} = \sigma_y$ and $\mu_{\hat{y}} = \mu_y$.
+	
+	\textit{Proof.} For any $\varphi > 0$ the arithmetic-geometric mean inequality gives $\varphi + \varphi^{-1} \ge 2\sqrt{\varphi \cdot \varphi^{-1}} = 2$, with equality if and only if $\varphi = \varphi^{-1}$ ($\varphi = 1$). Since also $\omega^2 \ge 0$ with equality if f $\mu_{\hat{y}} = \mu_y$, the denominator of $C_b$ satisfies $\varphi + \varphi^{-1} + \omega^2 \ge 2$, hence $C_b \le 1$ and $\text{CCC} = \rho\,C_b \le \rho$. Both equality conditions hold simultaneously precisely when $\sigma_{\hat{y}} = \sigma_y$ and $\mu_{\hat{y}} = \mu_y$. $\square$
+	
+	\textbf{Implication.} The correlation $\rho$ is a ceiling on the CCC that no post-hoc transformation of the predictions can raise. The accuracy factor $C_b$ can be driven towards its maximum of $1$ by matching the prediction's standard deviation and mean to those of the target, an essentially mechanical calibration; but $\rho$ is invariant under any affine rescaling of $\hat{y}$ and depends only on how the predictions are \emph{ordered} relative to the targets. Once a model is approximately calibrated, therefore, the entire remaining margin lies in improving that ordering - a property of the model's discriminative capacity, not of its output scale. This is what recommends architectural and optimisation choices that lengthen the temporal horizon over which evidence is integrated (Section 1.3.1) and that make cross-modal context genuinely available (Section 1.3.2), and it motivates supplementing the pointwise likelihood with a discriminative training term.
+
+	\textbf{Implication.} The Pearson correlation $\rho$ sets an upper limit on the CCC that cannot be increased by tweaking or post-processing the predictions after the model has run. The accuracy factor $C_b$ can easily reach its maximum value of $1$ simply by adjusting the predictions' mean and standard deviation to match the real targets. However, scaling or shifting the predictions ($\hat{y}$) mathematically does not change $\rho$ at all, because $\rho$ depends purely on whether the predictions are placed in the correct relative order.
+
+	Once a model is properly calibrated, any further boost in performance must come from improving that target ordering. This relies directly on the model's ability to tell different states apart, rather than the scale of its outputs. This insight justifies structural and optimization decisions that expand the model's memory over longer time spans and ensure that information moves cleanly across different modalities. It also provides a strong reason to add a discriminative loss term alongside standard point-by-point likelihood training.
 
 	\subsection{Conditional Demographic Disparity (CDD)}
 	To quantify fairness across demographic groups we adopt the Conditional Demographic Disparity \cite{wachter2021, withanage25}, which asks whether, \emph{at the same ground-truth engagement level}, the model systematically over- or under-predicts for one group relative to another. Conditioning on $y$ is what distinguishes CDD from a raw demographic-parity gap: it separates genuine model bias from legitimate differences in the underlying engagement distributions of the groups.
@@ -490,6 +532,9 @@
 		$D_C$ & Depthwise convolution kernel size & $4$ \\
 		$d_h$ & Beta head hidden width & $128$ \\
 		-- & Total parameters (core subset) & $\approx 7.2$M \\
+		$\Delta_{\min}$ & Minimum timestep at initialisation & $10^{-3}$ \\
+		$\Delta_{\max}$ & Maximum timestep at initialisation & $10^{-1}$ \\
+		-- & $A$ initialisation scheme & S4D-Real \\
 		\midrule
 		\multicolumn{3}{l}{\textit{Gumbel-Sinkhorn}} \\
 		$d_s$ & Query/key projection dimension & $64$ \\
@@ -576,6 +621,10 @@
 		
 		\bibitem{funk2024noxij}
 		Marius Funk, Shogo Okada, and Elisabeth Andr\'{e}, \emph{Multilingual Dyadic Interaction Corpus NoXi+J: Toward Understanding Asian-European Non-verbal Cultural Characteristics and their Influences on Engagement}, Proceedings of the ACM International Conference on Multimodal Interaction, 224--233 (2024). doi:10.1145/3678957.3685757.
+
+		\bibitem{gu2022s4d} Albert Gu, Ankit Gupta, Karan Goel, and Christopher R\'{e}, \emph{On the Parameterization and Initialization of Diagonal State Space Models}, Advances in Neural Information Processing Systems (NeurIPS 2022), 35, 35971--35983.
+
+		\bibitem{oppenheim1997} Alan V. Oppenheim, Alan S. Willsky, and S. Hamid Nawab, \emph{Signals and Systems}, 2nd edition, Prentice Hall (1997).
 	\end{thebibliography}
 	
 \end{document}

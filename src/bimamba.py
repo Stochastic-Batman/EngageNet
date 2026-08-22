@@ -8,11 +8,41 @@ from read_data import ROLES
 from ssm import ssm
 
 
+
+def _a_log_init(key: jax.Array, shape: tuple[int, ...], dtype=jnp.float32) -> jax.Array:
+    """S4D-Real initialisation: a_{d,n} = -(n+1), stored as log|A|.
+
+    Gives every channel a geometric ladder of decay rates instead of a single shared one,
+    so the N state coordinates cover a range of timescales rather than N copies of one.
+    """
+    _, N = shape
+    n = jnp.arange(1, N + 1, dtype=dtype)  # 1, 2, ..., N
+    return jnp.broadcast_to(jnp.log(n), shape).astype(dtype)
+
+
+def _s_delta_init(dt_min: float, dt_max: float):
+    """Initialise s_delta so that softplus(s_delta) is log-uniform on [dt_min, dt_max].
+
+    tau_eff = 1 / (delta * |A|) steps, so this sets the block's starting receptive field.
+    Zeros would give delta = softplus(0) = ln 2, i.e. tau_eff ~ 1.4 steps (~58 ms at 25 Hz).
+    """
+    log_lo, log_hi = jnp.log(dt_min), jnp.log(dt_max)
+
+    def init(key: jax.Array, shape: tuple[int, ...], dtype=jnp.float32) -> jax.Array:
+        u = jax.random.uniform(key, shape, dtype=dtype)
+        dt = jnp.exp(u * (log_hi - log_lo) + log_lo)
+        return jnp.log(jnp.expm1(dt)).astype(dtype)  # softplus^{-1}(dt)
+
+    return init
+
+
 class BiMambaBlock(nn.Module):
     D: int  # D
     N: int  # N
     D_C:  int  # depthwise convolution kernel size
     pre_norm: bool = True  # LayerNorm on the residual stream
+    dt_min: float = 1e-3  # smallest delta at init -> longest receptive field
+    dt_max: float = 1e-1  # largest delta at init -> shortest receptive field
 
     # h: (B, L', D) -> (B, L', D)
     @nn.compact
@@ -25,15 +55,15 @@ class BiMambaBlock(nn.Module):
         
         x_fwd = nn.silu(nn.Conv(features=D, kernel_size=(self.D_C,), padding="SAME", feature_group_count=D)(x))
         # A stored in log-space so exp keeps it negative -> A_bar = exp(delta*A) in (0,1), stable
-        A_fwd = -jnp.exp(self.param("A_log_fwd", nn.initializers.zeros_init(), (D, N)))
-        delta_fwd = nn.softplus(self.param("s_delta_fwd", nn.initializers.zeros_init(), (D,)) + nn.Dense(D)(x_fwd))
+        A_fwd = -jnp.exp(self.param("A_log_fwd", _a_log_init, (D, N)))
+        delta_fwd = nn.softplus(self.param("s_delta_fwd", _s_delta_init(self.dt_min, self.dt_max), (D,)) + nn.Dense(D)(x_fwd))
         B_fwd = nn.Dense(N, use_bias=False)(x_fwd)  # (B, L', N)
         C_fwd = nn.Dense(N, use_bias=False)(x_fwd)  # (B, L', N)
         h_fwd = g * ssm(x_fwd, delta_fwd, A_fwd, B_fwd, C_fwd)  # (B, L', D)
 
         x_bwd = nn.silu(nn.Conv(features=D, kernel_size=(self.D_C,), padding="SAME", feature_group_count=D)(jnp.flip(x, axis=1)))
-        A_bwd = -jnp.exp(self.param("A_log_bwd", nn.initializers.zeros_init(), (D, N)))
-        delta_bwd = nn.softplus(self.param("s_delta_bwd", nn.initializers.zeros_init(), (D,)) + nn.Dense(D)(x_bwd))
+        A_bwd = -jnp.exp(self.param("A_log_bwd", _a_log_init, (D, N)))
+        delta_bwd = nn.softplus(self.param("s_delta_bwd", _s_delta_init(self.dt_min, self.dt_max), (D,)) + nn.Dense(D)(x_bwd))
         B_bwd = nn.Dense(N, use_bias=False)(x_bwd)  # (B, L', N)
         C_bwd = nn.Dense(N, use_bias=False)(x_bwd)  # (B, L', N)
         h_bwd = g * jnp.flip(ssm(x_bwd, delta_bwd, A_bwd, B_bwd, C_bwd), axis=1)  # (B, L', D)

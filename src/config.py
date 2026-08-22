@@ -74,6 +74,9 @@ class EngageNetConfig:
     # SSM / BiMamba
     ssm_state_dim: int = 16        # N - state dimension in selective SSM
     conv_kernel: int = 4           # D_C -  depthwise conv kernel in BiMamba
+    dt_min: float = 1e-3           # smallest delta at initialisation
+    dt_max: float = 1e-1           # largest delta at initialisation
+    cross_modal_conv_kernel: int = 2   # D_C for the fusion block (scan axis is M, not L')
 
     # Gumbel-Sinkhorn
     gs_dim: int = 64               # query/key projection dim for score matrix

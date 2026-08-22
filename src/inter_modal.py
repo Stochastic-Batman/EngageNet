@@ -70,9 +70,13 @@ class InterModalBiMamba(nn.Module):
 
         reordered = jnp.einsum("bij,bjlc->bilc", P, stacked)  # reordered[b,i] = sum_j P[b,i,j] * stacked[b,j] -> (B, M, L', C')
 
-        fused = reordered.reshape(B, M, Lp, Cp).transpose(0, 2, 1, 3).reshape(B, Lp, M * Cp)
+        # Fuse along the MODALITY axis: sequence length M, feature width C'.
+        # Folding time into the batch applies the same block, with shared weights, at every step.
+        seq = reordered.transpose(0, 2, 1, 3).reshape(B * Lp, M, Cp)  # (B * L', M, C')
 
         block = BiMambaBlock(D=self.D, N=self.N, D_C=self.D_C, name="cross_modal_bimamba")
-        H = block(fused, train=train)  # (B, L', MC')
+        fused = block(seq, train=train)  # (B * L', M, C')
+
+        H = fused.reshape(B, Lp, M * Cp)  # (B, L', MC')
 
         return H
