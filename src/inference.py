@@ -53,27 +53,28 @@ def run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, rng
 
         stream_inputs = {}
         for key, val in window.items():
-            if isinstance(val, np.ndarray) and not key.endswith(".engagement"):
+            if isinstance(val, np.ndarray) and not key.endswith(".engagement") and not key.endswith(".gender"):
                 stream_inputs[key] = jnp.array(val[np.newaxis])
 
         variables = {"params": state.params, "batch_stats": state.batch_stats}
-        (alpha, beta, unimodal), _ = state.apply_fn(variables, stream_inputs, tau=cnfg.tau_min, rng=None, train=False, mutable=["batch_stats"])
+        (multimodal, unimodal), _ = state.apply_fn(variables, stream_inputs, tau=cnfg.tau_min, rng=None, train=False, mutable=["batch_stats"])
 
-        # Pool over time for TTA sample filter (needs scalar uncertainty per sample)
-        alpha_pooled = alpha.mean(axis=-1)
-        beta_pooled = beta.mean(axis=-1)
+        # TTA filter needs one scalar uncertainty per sample: pool over time, then over roles
+        alpha_pooled = jnp.stack([a for a, _ in multimodal.values()], axis=0).mean(axis=(0, -1))
+        beta_pooled = jnp.stack([b for _, b in multimodal.values()], axis=0).mean(axis=(0, -1))
         unimodal_pooled = {k: (a.mean(axis=-1), b.mean(axis=-1)) for k, (a, b) in unimodal.items()}
         mask = sample_filter(alpha_pooled, beta_pooled, unimodal_pooled)
+
         if mask.any():
             rng, rng_tta = jax.random.split(rng)
-            state, _loss, alpha, beta, unimodal = tta_step(state, stream_inputs, tau=cnfg.tau_min, rng=rng_tta)
-
-        pred = np.array(predictive_mean(alpha, beta)[0])  # (L',)
+            state, _loss, multimodal, unimodal = tta_step(state, stream_inputs, tau=cnfg.tau_min, rng=rng_tta)
 
         for role in ROLES:
-            window_preds[role].append(pred)
+            a, b = multimodal[role]
+            window_preds[role].append(np.array(predictive_mean(a, b)[0]))  # (L',)
 
-        idx += 1
+        idx += 1    
+    
 
     # Determine total session length from engagement annotations or stream length
     session = load_session(session_dir)

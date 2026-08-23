@@ -63,3 +63,39 @@ def cdd_language(predictions: np.ndarray, targets: np.ndarray, languages: np.nda
         result[str(lang)] = float(cdd / max(total, 1))
 
     return result
+
+
+# predictions: (N,) ; targets: (N,) -> scalar, differentiable
+def ccc_jnp(predictions: jnp.ndarray, targets: jnp.ndarray) -> jnp.ndarray:
+    mu_p, mu_t = predictions.mean(), targets.mean()
+    var_p, var_t = predictions.var(), targets.var()
+    cov_pt = ((predictions - mu_p) * (targets - mu_t)).mean()
+    return 2 * cov_pt / (var_p + var_t + (mu_p - mu_t) ** 2 + 1e-8)
+
+
+# predictions: (N,) ; targets: (N,) ; groups: (N,) in {0, 1}, -1 = unknown -> scalar, differentiable
+def fairness_penalty(predictions: jnp.ndarray, targets: jnp.ndarray, groups: jnp.ndarray, n_bins: int = 10) -> jnp.ndarray:
+    """Squared CDD: bin-weighted mean of the squared group-mean gap within target quantile bins.
+
+    Zero when both groups receive the same prediction at the same target level.
+    Bins missing either group contribute to neither numerator nor denominator.
+    """
+    qs = jnp.linspace(0.0, 1.0, n_bins + 1)[1:-1]
+    edges = jnp.quantile(targets, qs)
+    idx = jnp.searchsorted(edges, targets)  # (N,) in [0, n_bins-1]
+
+    num = 0.0
+    den = 0.0
+    for b in range(n_bins):  # unrolled at trace time; n_bins is static
+        in_bin = (idx == b)
+        a = in_bin & (groups == 1)
+        c = in_bin & (groups == 0)
+        n_a, n_c = a.sum(), c.sum()
+        mean_a = (predictions * a).sum() / jnp.maximum(n_a, 1)
+        mean_c = (predictions * c).sum() / jnp.maximum(n_c, 1)
+        valid = (n_a > 0) & (n_c > 0)
+        w = jnp.where(valid, in_bin.sum(), 0.0)
+        num = num + w * (mean_a - mean_c) ** 2
+        den = den + w
+
+    return num / jnp.maximum(den, 1.0)

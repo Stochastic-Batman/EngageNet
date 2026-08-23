@@ -54,6 +54,8 @@ class InterModalBiMamba(nn.Module):
     D_C: int                # depthwise conv kernel size
     GS_dim: int = 64         # Gumbel-Sinkhorn projection dim
     n_iters: int = 10       # Sinkhorn iterations
+    dt_min: float = 1e-3
+    dt_max: float = 1e-1
 
     # hiddens: dict{str: (B, L', C')} ; tau: Gumbel temperature ; rng: PRNGKey or None -> H: (B, L', MC')
     @nn.compact
@@ -74,7 +76,8 @@ class InterModalBiMamba(nn.Module):
         # Folding time into the batch applies the same block, with shared weights, at every step.
         seq = reordered.transpose(0, 2, 1, 3).reshape(B * Lp, M, Cp)  # (B * L', M, C')
 
-        block = BiMambaBlock(D=self.D, N=self.N, D_C=self.D_C, name="cross_modal_bimamba")
+        block = BiMambaBlock(D=self.D, N=self.N, D_C=self.D_C, dt_min=self.dt_min, dt_max=self.dt_max, name="cross_modal_bimamba")
+        
         fused = block(seq, train=train)  # (B * L', M, C')
 
         H = fused.reshape(B, Lp, M * Cp)  # (B, L', MC')

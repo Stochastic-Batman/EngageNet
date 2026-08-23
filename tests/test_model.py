@@ -48,26 +48,31 @@ def main() -> None:
     log.info(f"Total params: {param_count:,}")
 
     # Forward pass
-    (multi_alpha, multi_beta, unimodal), updates = model.apply(
+    (multimodal, unimodal), updates = model.apply(
         variables, inputs, tau=1.0, rng=rng_gumbel, train=False, mutable=["batch_stats"]
     )
 
-    log.info(f"multi_alpha: {multi_alpha.shape}  multi_beta: {multi_beta.shape}")
-    assert multi_alpha.shape == (B, cnfg.window_len)
-    assert multi_beta.shape == (B, cnfg.window_len)
+    assert set(multimodal) == set(ROLES), f"expected one multimodal head per role, got {sorted(multimodal)}"
+
+    for role, (a, b) in sorted(multimodal.items()):
+        log.info(f"multimodal[{role}]: alpha={a.shape} beta={b.shape}")
+        assert a.shape == (B, cnfg.window_len)
+        assert b.shape == (B, cnfg.window_len)
+        # Sanity: alpha, beta > 1 (softplus + 1 keeps the density unimodal)
+        assert (a > 1).all(), f"multimodal[{role}] alpha has values <= 1: {a}"
+        assert (b > 1).all(), f"multimodal[{role}] beta has values <= 1: {b}"
+
+    assert len(unimodal) == M, f"expected {M} unimodal heads, got {len(unimodal)}"
 
     for k, (a, b) in sorted(unimodal.items()):
         log.info(f"  {k:45s}  alpha={a.shape} beta={b.shape}")
         assert a.shape == (B, cnfg.window_len)
         assert b.shape == (B, cnfg.window_len)
-
-    # Sanity: alpha, beta > 1 (unimodal Beta)
-    assert (multi_alpha > 1).all(), f"multi_alpha has values <= 1: {multi_alpha}"
-    assert (multi_beta > 1).all(), f"multi_beta has values <= 1: {multi_beta}"
+        assert (a > 1).all(), f"{k} alpha has values <= 1"
+        assert (b > 1).all(), f"{k} beta has values <= 1"
 
     log.info("Full model smoke-test passed!")
 
 
 if __name__ == "__main__":
     main()
-

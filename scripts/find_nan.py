@@ -10,7 +10,6 @@ from beta_head import nll_loss
 from config import CORE_MODALITIES, EngageNetConfig
 from data_loader import iter_batches
 from model import EngageNet
-from read_data import ROLES
 from train import create_train_state, _drop_meta
 
 
@@ -26,11 +25,11 @@ for k in sorted(batch):
     print(f"  {k:40s} min={float(jnp.min(v)):12.4g} max={float(jnp.max(v)):12.4g} "
           f"nan={int(jnp.isnan(v).sum()):d}")
 
-stream_inputs = {k: v for k, v in batch.items() if not k.endswith(".engagement")}
+stream_inputs = {k: v for k, v in batch.items() if not (k.endswith(".engagement") or k.endswith(".gender"))}
 model = EngageNet(cnfg=cnfg)
 variables = {"params": state.params, "batch_stats": state.batch_stats}
 
-(alpha, beta, uni), mods = model.apply(
+(multimodal, uni), mods = model.apply(
     variables, stream_inputs, tau=1.0, rng=jax.random.PRNGKey(1), train=True,
     mutable=["batch_stats", "intermediates"], capture_intermediates=True)
 
@@ -52,9 +51,15 @@ for path, v in flat:
 
 print("\n".join(bad) if bad else "  (no NaN/inf and nothing above 1e6 in captured intermediates)")
 
-print(f"\nalpha: nan={int(jnp.isnan(alpha).sum())} min={float(jnp.nanmin(alpha)):.4g} max={float(jnp.nanmax(alpha)):.4g}")
-print(f"beta : nan={int(jnp.isnan(beta).sum())} min={float(jnp.nanmin(beta)):.4g} max={float(jnp.nanmax(beta)):.4g}")
+print("\n=== PER-ROLE HEADS ===")
+for role, (alpha, beta) in sorted(multimodal.items()):
+    print(f"{role}: alpha nan={int(jnp.isnan(alpha).sum())} min={float(jnp.nanmin(alpha)):.4g} max={float(jnp.nanmax(alpha)):.4g}")
+    print(f"{role}: beta  nan={int(jnp.isnan(beta).sum())} min={float(jnp.nanmin(beta)):.4g} max={float(jnp.nanmax(beta)):.4g}")
 
-tg = jnp.stack([batch[f"{r}.engagement"] for r in ROLES if f"{r}.engagement" in batch]).mean(0)
-print(f"target: nan={int(jnp.isnan(tg).sum())} min={float(jnp.min(tg)):.4g} max={float(jnp.max(tg)):.4g}")
-print(f"LOSS (forward only, before any update) = {float(nll_loss(alpha, beta, tg)):.6g}")
+    key = f"{role}.engagement"
+    if key not in batch:
+        print(f"{role}: no engagement annotation in this batch, skipping loss")
+        continue
+    tg = batch[key]
+    print(f"{role}: target nan={int(jnp.isnan(tg).sum())} min={float(jnp.min(tg)):.4g} max={float(jnp.max(tg)):.4g}")
+    print(f"{role}: LOSS (forward only, before any update) = {float(nll_loss(alpha, beta, tg)):.6g}")

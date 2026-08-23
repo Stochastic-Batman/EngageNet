@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from jax.scipy.stats import beta as beta_dist
+from read_data import ROLES
 
 
 # alpha: (B, ...) ; beta: (B, ...) -> (B, ...)
@@ -18,10 +19,24 @@ def predictive_variance(alpha: jax.Array, beta: jax.Array) -> jax.Array:
     return (alpha * beta) / (apb * apb * (apb + 1))
 
 
-# alpha: (B, ...) ; beta: (B, ...) ; targets: (B, ...) -> scalar
-def nll_loss(alpha: jax.Array, beta: jax.Array, targets: jax.Array) -> jax.Array:
+# alpha: (B, ...) ; beta: (B, ...) ; targets: (B, ...) ; weights: (B, ...) or None -> scalar
+def nll_loss(alpha: jax.Array, beta: jax.Array, targets: jax.Array, weights: jax.Array | None = None) -> jax.Array:
     targets = jnp.clip(targets, 1e-6, 1.0 - 1e-6)
-    return -beta_dist.logpdf(targets, alpha, beta).mean()
+    ll = beta_dist.logpdf(targets, alpha, beta)
+    if weights is None:
+        return -ll.mean()
+    return -(weights * ll).sum() / (weights.sum() + 1e-8)
+
+
+# alpha: (B, ...) ; beta: (B, ...) -> (B, ...)
+def beta_nll_weights(alpha: jax.Array, beta: jax.Array, beta_w: float) -> jax.Array:
+    """Detached kappa^{-beta_w}; cancels the precision factor in d(-log p)/d(mu).
+
+    beta_w = 0 -> plain NLL; beta_w = 1 -> update independent of confidence.
+    Detached so the model cannot lower the loss by inflating kappa.
+    """
+    kappa = jax.lax.stop_gradient(alpha + beta)
+    return kappa ** (-beta_w)
 
 
 class BetaHead(nn.Module):
@@ -43,10 +58,12 @@ class BetaHead(nn.Module):
 class MultiHeadBeta(nn.Module):
     hidden_dim: int = 128
 
-    # fused: (B, L', MC') ; per_modality: dict{str: (B, L', C')} -> (multimodal_alpha: (B, L'), multimodal_beta: (B, L'), dict{str: (alpha, beta)})
+    # fused: (B, L', MC') ; per_modality: dict{"{role}.{feat}": (B, L', C')}
+    # -> (multimodal: dict{role: (alpha, beta)}, unimodal: dict{"{role}.{feat}": (alpha, beta)})
     @nn.compact
-    def __call__(self, fused: jax.Array, per_modality: dict[str, jax.Array]) -> tuple[jax.Array, jax.Array, dict[str, tuple[jax.Array, jax.Array]]]:
-        multimodal_alpha, multimodal_beta = BetaHead(hidden_dim=self.hidden_dim, name="multi_head")(fused)
+    def __call__(self, fused: jax.Array, per_modality: dict[str, jax.Array]) -> tuple[dict[str, tuple[jax.Array, jax.Array]], dict[str, tuple[jax.Array, jax.Array]]]:
+        # One multimodal head per role, both reading the same fused representation
+        multimodal = {role: BetaHead(hidden_dim=self.hidden_dim, name=f"multi_head_{role}")(fused) for role in ROLES}
 
         feats = sorted(set(key.split(".", 1)[1] for key in per_modality))
         unimodal: dict[str, tuple[jax.Array, jax.Array]] = {}
@@ -57,5 +74,4 @@ class MultiHeadBeta(nn.Module):
                 if key.split(".", 1)[1] == feat:
                     unimodal[key] = head(per_modality[key])
 
-        return multimodal_alpha, multimodal_beta, unimodal
-
+        return multimodal, unimodal

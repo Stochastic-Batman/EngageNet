@@ -20,6 +20,9 @@ from read_data import ROLES, STREAM_FEATURES, load_session, log
 
 
 
+_GENDER_CODES = {"1": 1, "2": 0}
+
+
 def _resample(data: np.ndarray, src_sr: float, tgt_sr: float) -> np.ndarray:
     """Resample `data` (T_src, D) from `src_sr` to `tgt_sr` via linear interpolation."""
     if src_sr == tgt_sr:
@@ -45,6 +48,15 @@ def _pad_or_trim(arr: np.ndarray, length: int) -> np.ndarray:
     
     return np.concatenate([arr, pad], axis=0)
 
+
+def _gender_code(session_dir: Path, role: str) -> int:
+    """Binary group label for one participant; -1 when absent or unrecognised."""
+    from read_data import read_scalar_annotation
+
+    p = session_dir / f"{role}.gender.annotation.csv"
+    if not p.exists():
+        return -1
+    return _GENDER_CODES.get(read_scalar_annotation(p).strip(), -1)
 
 
 class EngageNetDataset:
@@ -130,6 +142,9 @@ class EngageNetDataset:
             else:
                 engagement[role] = None
 
+        # 3b. Per-participant group label - constant across the session, so read once
+        genders = {role: np.int8(_gender_code(session_dir, role)) for role in ROLES}
+
         # 4. Slice into windows
         W = cnfg.window_len
         S = cnfg.window_stride
@@ -146,4 +161,5 @@ class EngageNetDataset:
             for role in ROLES:
                 if engagement[role] is not None:
                     sample[f"{role}.engagement"] = engagement[role][start:end]
+                sample[f"{role}.gender"] = genders[role]
             yield sample

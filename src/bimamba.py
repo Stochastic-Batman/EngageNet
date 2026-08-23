@@ -77,6 +77,8 @@ class IntraModalBiMamba(nn.Module):
     D: int
     N: int
     D_C:  int
+    dt_min: float = 1e-3
+    dt_max: float = 1e-1
 
     # hiddens: dict{str: (B, L', C')} -> dict{str: (B, L', C')}
     @nn.compact
@@ -87,7 +89,7 @@ class IntraModalBiMamba(nn.Module):
         u: dict[str, jax.Array] = {}
 
         for feat in feats:
-            block = BiMambaBlock(D=self.D, N=self.N, D_C=self.D_C, name=f"bimamba_{feat.replace('.', '_')}")
+            block = BiMambaBlock(D=self.D, N=self.N, D_C=self.D_C, dt_min=self.dt_min, dt_max=self.dt_max, name=f"bimamba_{feat.replace('.', '_')}")
             for role in ROLES:
                 key = f"{role}.{feat}"
                 if key not in hiddens:

@@ -69,14 +69,22 @@ def tta_step(state, stream_inputs: dict[str, jax.Array], *, tau: float, rng: jax
 
     def loss_fn(params):
         variables = {"params": params, "batch_stats": state.batch_stats}
-        (alpha, beta, unimodal), updates = state.apply_fn(variables, stream_inputs, tau=tau, rng=rng, train=True, mutable=["batch_stats"])
-        loss = tta_loss(alpha, beta, unimodal, lam=lam)
-        return loss, (updates["batch_stats"], alpha, beta, unimodal)
+        (multimodal, unimodal), updates = state.apply_fn(variables, stream_inputs, tau=tau, rng=rng, train=True, mutable=["batch_stats"])
+
+        # Each role's multimodal head teaches only the unimodal heads reading that role's streams
+        loss = jnp.zeros(())
+        for role, (a, b) in multimodal.items():
+            uni_role = {k: v for k, v in unimodal.items() if k.split(".", 1)[0] == role}
+            loss = loss + tta_loss(a, b, uni_role, lam=lam)
+        loss = loss / max(len(multimodal), 1)
+
+        return loss, (updates["batch_stats"], multimodal, unimodal)
+
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-    (loss, (new_batch_stats, alpha, beta, unimodal)), grads = grad_fn(state.params)
+    (loss, (new_batch_stats, multimodal, unimodal)), grads = grad_fn(state.params)
     grads = jax.tree_util.tree_map(lambda g, m: g if m else jnp.zeros_like(g), grads, mask)
     state = state.apply_gradients(grads=grads)
     state = state.replace(batch_stats=new_batch_stats)
 
-    return state, loss, alpha, beta, unimodal
+    return state, loss, multimodal, unimodal

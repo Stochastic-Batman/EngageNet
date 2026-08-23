@@ -67,6 +67,13 @@ class EngageNetConfig:
     patience: int = 10
     submission_dir: Path = Path(__file__).resolve().parent.parent / "submissions"
 
+    # Training objective
+    lambda_ccc: float = 1.0        # weight of the ordering (CCC) term
+    lambda_uni: float = 0.5        # per-modality supervision, divided by M internally
+    lambda_fair: float = 0.05      # fairness penalty weight
+    beta_w: float = 0.5            # likelihood reweighting exponent, kappa^{-beta_w}
+    cdd_bins: int = 10             # ground-truth quantile bins for CDD and its penalty
+    
     # Override the split inference.py writes predictions for (None = each corpus's default).
     # Use "val" to produce predictions that evaluate.py can actually score.
     submission_split: Optional[str] = None
