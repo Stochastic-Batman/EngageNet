@@ -1,0 +1,877 @@
+\documentclass[aspectratio=169]{beamer}
+
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning}
+
+\definecolor{coolpurple}{HTML}{7f65a0}
+\definecolor{lightpurple}{HTML}{ede8f5}
+\definecolor{darktext}{HTML}{1a1a2e}
+\definecolor{highlightpurple}{HTML}{5a3e82}
+
+\setbeamercolor{normal text}{fg=darktext, bg=white}
+\setbeamercolor{structure}{fg=coolpurple}
+\setbeamercolor{frametitle}{fg=white, bg=coolpurple}
+\setbeamercolor{title}{fg=white, bg=coolpurple}
+\setbeamercolor{subtitle}{fg=white}
+\setbeamercolor{date}{fg=coolpurple}
+\setbeamercolor{author}{fg=coolpurple}
+\setbeamercolor{item}{fg=coolpurple}
+\setbeamercolor{subitem}{fg=coolpurple!70!black}
+\setbeamercolor{block title}{bg=coolpurple, fg=white}
+\setbeamercolor{block body}{bg=lightpurple, fg=darktext}
+\setbeamercolor{alerted text}{fg=highlightpurple}
+
+\setbeamertemplate{itemize item}{\color{coolpurple}$\blacktriangleright$}
+\setbeamertemplate{itemize subitem}{\color{coolpurple!70}$\bullet$}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}{%
+	\hfill\insertframenumber\,/\,\inserttotalframenumber\hspace{1em}\vspace{0.5em}
+}
+
+\newcommand{\hl}[1]{\textcolor{coolpurple}{\textbf{#1}}}
+\newcommand{\R}{\mathbb{R}}
+
+\title{EngageNet}
+\subtitle{Progress Update - August 26, 2026}
+\author{Lado Turmanidze, Luka Javakhishvili, Mariami Gadelia, Keso Chikhladze}
+\institute{\small{Supervisors: Dr. Philipp M\"{u}ller \& Beso Mikaberidze}}
+\date{August 26, 2026}
+
+\begin{document}
+
+	\begin{frame}
+		\titlepage
+	\end{frame}
+
+	\begin{frame}{The Short Version}
+		\begin{block}{What happened since May}
+			The model was built, it trained, and it produced numbers - but the numbers were bad.
+			\vspace{0.4em}
+
+			I went looking for \emph{why}, and found six problems. Two of them are not opinions:
+			they are arithmetic. The model literally could not do what we designed it to do.
+		\end{block}
+		\vspace{0.5em}
+		\begin{center}
+			\begin{tikzpicture}
+				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
+				minimum width=11cm, minimum height=1.0cm, align=center,
+				font=\small\bfseries, text=coolpurple] {
+					All six are now fixed in code. The paper has been rewritten to match.\\
+					Nothing has been retrained yet - the GPUs are busy.
+				};
+			\end{tikzpicture}
+		\end{center}
+	\end{frame}
+
+	\begin{frame}{Today's Agenda}
+		\begin{enumerate}
+			\item \textbf{Recap} - what the task is, what the model does
+			\item \textbf{Where we stood} - the numbers that started this
+			\item \textbf{The map} - a small theorem telling us where to look
+			\item \textbf{Problem 1} - the model had no memory
+			\item \textbf{Problem 2} - the modalities never talked to each other
+			\item \textbf{Problem 3} - we predicted the wrong thing
+			\item \textbf{Problem 4} - the loss function had three bugs
+			\item \textbf{Results \& what is still open}
+		\end{enumerate}
+	\end{frame}
+
+	% ============================== PART 0: RECAP ==============================
+
+	\begin{frame}{\textsc{Part 0:} What Is The Task?}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.52\textwidth}
+				\begin{block}{The setup}
+					\small
+					Two people talk over a video link. One is the \hl{expert} (explains something
+					they love), one is the \hl{novice} (listens, asks questions).
+					\vspace{0.3em}
+
+					Human annotators watch the recording and move a slider to say
+					\emph{how engaged is this person, right now}.
+				\end{block}
+			\end{column}
+			\begin{column}{0.44\textwidth}
+				\begin{block}{Our job}
+					\small
+					For \textbf{every frame} of video, and for \textbf{each of the two people},
+					predict that slider value.
+					$$ y_t \in [0,1], \qquad 25 \text{ frames per second} $$
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.5em}
+		\centering\small
+		A 10-minute session is $\sim$15{,}000 numbers per person. We predict all of them.
+	\end{frame}
+
+	\begin{frame}{Recap - The Data We Get}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Four feature types $\mathcal{F}$}
+					\small
+					\begin{itemize}
+						\item eGeMAPS v2 - acoustic descriptors
+						\item W2v-BERT 2.0 - learned speech embedding
+						\item OpenFace2 - facial action units
+						\item OpenPose - body keypoints
+					\end{itemize}
+				\end{block}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Two roles $\mathcal{R}$}
+					\small
+					Separate camera and microphone per person, so \textbf{every feature type
+					arrives twice}:
+					$$ M = |\mathcal{F}| \times |\mathcal{R}| = 4 \times 2 = 8 $$
+					8 parallel streams into the network.
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.5em}
+		\begin{center}
+			\begin{tikzpicture}
+				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
+				minimum width=11cm, minimum height=0.8cm, align=center,
+				font=\small, text=darktext] {
+					Remember this $M = 8$. Half of today's talk is about what the model does
+					with these 8 streams.
+				};
+			\end{tikzpicture}
+		\end{center}
+	\end{frame}
+
+	\begin{frame}{Recap - Architecture (as of May)}
+		\centering
+		\begin{tikzpicture}[
+			node distance=0.55cm,
+			font=\small,
+			box/.style={draw=coolpurple, fill=lightpurple, rounded corners,
+				minimum width=3.6cm, minimum height=0.65cm, align=center}
+			]
+
+			\node[box] (input) {8 raw streams $x_i \in \R^{C_i \times L}$};
+			\node[box, below=of input] (enc) {InitEncoder (Conv1D + BN + SiLU)};
+			\node[box, below=of enc] (proj) {Project all to width $C'=128$};
+			\node[box, below=of proj] (intra) {Intra-Modal BiMamba};
+			\node[box, below=of intra, fill=coolpurple, text=white, font=\small\bfseries] (gs) {Gumbel-Sinkhorn Ordering};
+
+			\node[box, right=2.2cm of input] (inter) {Inter-Modal BiMamba};
+			\node[box, below=of inter] (beta) {Beta Head $\to (\alpha, \beta)$};
+			\node[box, below=of beta] (out) {$\hat{\mu} = \alpha/(\alpha+\beta) \in [0,1]$};
+			\node[box, below=of out, fill=white] (tta) {TTA at test time};
+
+			\foreach \a/\b in {input/enc, enc/proj, proj/intra, intra/gs, gs/inter, inter/beta, beta/out, out/tta} {
+				\draw[->, thick, coolpurple] (\a) -- (\b);
+			}
+
+			\node[right=0.3cm of gs, text=coolpurple, font=\tiny, align=left]
+			{(learns which order \\ to process the \\ 8 streams in)};
+
+		\end{tikzpicture}
+	\end{frame}
+
+	\begin{frame}{Recap - What A State-Space Model Actually Does}
+		\begin{block}{One line of maths, and it is the whole idea}
+			$$ \xi_t = \bar{A}\,\xi_{t-1} + \bar{B}_t u_t $$
+			\small
+			$\xi_t$ is the model's \hl{memory} at step $t$. Each step it keeps a fraction
+			$\bar{A}$ of what it remembered, and adds in the new input $u_t$.
+		\end{block}
+		\vspace{0.3em}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Why this shape}
+					\small
+					$\bar{A} \in (0,1)$, so old information fades smoothly instead of
+					blowing up. Nice and stable.
+				\end{block}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Why it is fast}
+					\small
+					Looks sequential, but the update is \emph{affine}, so we can compute all
+					$L$ steps with an associative scan in $O(\log L)$ depth instead of $O(L)$.
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.4em}
+		\centering\small
+		\hl{Keep $\bar{A}$ in mind.} Problems 1 and 2 are both about this one number.
+	\end{frame}
+
+	\begin{frame}{Recap - Why Beta Instead Of A Plain Number}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.50\textwidth}
+				\begin{block}{The model outputs a distribution}
+					\small
+					Not one number, but two: $(\alpha, \beta)$, defining
+					$$ p(y \mid x) = \mathrm{Beta}(\alpha, \beta), \quad y \in [0,1] $$
+					Prediction is the mean $\hat{\mu} = \frac{\alpha}{\alpha+\beta}$.
+				\end{block}
+			\end{column}
+			\begin{column}{0.46\textwidth}
+				\begin{block}{Why bother}
+					\small
+					The \emph{spread} tells us how sure the model is:
+					$$ \mathrm{Var}[y] = \frac{\alpha\beta}{(\alpha+\beta)^2(\alpha+\beta+1)} $$
+					Test-time adaptation uses this to pick which unlabelled frames are safe
+					to learn from.
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.5em}
+		\centering\small
+		Beta lives on $[0,1]$ - exactly the range of engagement. A Gaussian would put
+		probability on $-0.3$ and $1.4$, which are not things.
+	\end{frame}
+
+	% ============================== PART 1: THE NUMBERS ==============================
+
+	\begin{frame}{\textsc{Part 1:} Where We Stood}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{What training gave us}
+					\small
+					\begin{itemize}
+						\item Best validation CCC: \hl{0.0227}
+						\item Reached at epoch 2, then flat
+						\item Correlation $\rho \approx 0.229$
+						\item 7.2M parameters
+					\end{itemize}
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{What the leaderboard looks like}
+					\small
+					\begin{tabular}{lr}
+						Official baseline & 0.400 \\
+						2025 winner & 0.699 \\
+						\hline
+						\textbf{Us} & \textbf{0.02} \\
+					\end{tabular}
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.6em}
+		\begin{center}
+			\begin{tikzpicture}
+				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
+				minimum width=11cm, minimum height=0.9cm, align=center,
+				font=\small\bfseries, text=coolpurple] {
+					This is not ``needs tuning''. This is ``something is structurally wrong''.\\
+					So instead of tuning, I went looking for what.
+				};
+			\end{tikzpicture}
+		\end{center}
+	\end{frame}
+
+	% ============================== PART 2: THE MAP ==============================
+
+	\begin{frame}{\textsc{Part 2:} A Small Theorem That Told Us Where To Look}
+		\begin{block}{Split CCC into two factors}
+			\small
+			Let $\varphi = \sigma_{\hat{y}}/\sigma_y$ (are the predictions as spread out as the truth?)
+			and $\omega = (\mu_{\hat{y}}-\mu_y)/\sqrt{\sigma_{\hat{y}}\sigma_y}$ (are they centred right?). Then
+			$$ \text{CCC} = \rho \cdot C_b, \qquad C_b = \frac{2}{\varphi + \varphi^{-1} + \omega^2} $$
+		\end{block}
+		\begin{block}{Proposition}
+			\small
+			$\text{CCC} \le \rho$, with equality only when $\sigma_{\hat{y}} = \sigma_y$ and $\mu_{\hat{y}} = \mu_y$.
+			\vspace{0.3em}
+
+			\emph{Proof.} $\varphi + \varphi^{-1} \ge 2$ for any $\varphi > 0$ (AM-GM), and $\omega^2 \ge 0$.
+			So the denominator of $C_b$ is at least $2$, giving $C_b \le 1$. $\square$
+		\end{block}
+		\vspace{0.3em}
+		\centering\small
+		\hl{Translation:} correlation is a hard ceiling. Rescaling the output can never beat it.
+	\end{frame}
+
+	\begin{frame}{What The Theorem Told Us}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Our numbers}
+					\small
+					$$ \rho = 0.229, \qquad \text{CCC} = 0.21 $$
+					$$ \implies C_b = \frac{0.21}{0.229} \approx 0.92 $$
+					We were already \hl{92\% calibrated}.
+				\end{block}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{So what does that mean}
+					\small
+					Fiddling with output scaling could buy us at most $0.229 - 0.21 = 0.02$.
+					\vspace{0.3em}
+
+					Every remaining point has to come from $\rho$ - from the model getting the
+					\emph{ordering} of frames right.
+				\end{alertblock}
+			\end{column}
+		\end{columns}
+		\vspace{0.6em}
+		\begin{center}
+			\begin{tikzpicture}
+				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
+				minimum width=11cm, minimum height=0.9cm, align=center,
+				font=\small\bfseries, text=coolpurple] {
+					The model could not tell engaged moments from bored ones.\\
+					Everything that follows is about \emph{why not}.
+				};
+			\end{tikzpicture}
+		\end{center}
+	\end{frame}
+
+	% ============================== PROBLEM 1 ==============================
+
+	\begin{frame}{\textsc{Problem 1:} The Model Had A Goldfish Memory}
+		\begin{block}{How long does an SSM remember?}
+			\small
+			Stop feeding it input. Then $\xi_{t_0+k} = \bar{A}^{\,k}\,\xi_{t_0}$: memory decays
+			geometrically. The standard measure is how long until it drops to $e^{-1}$:
+			$$ \bar{A}^{\,\tau_{\text{eff}}} = e^{-1} \;\Longrightarrow\;
+			\tau_{\text{eff}} = \frac{-1}{\ln \bar{A}} = \frac{1}{\Delta|A|} $$
+		\end{block}
+		\begin{alertblock}{Now plug in what we actually initialised}
+			\small
+			We set $A_{\log} = 0$ and $s_\Delta = 0$. That gives $|A| = e^0 = 1$ and
+			$\Delta = \text{softplus}(0) = \ln 2 \approx 0.693$, so
+			$$ \tau_{\text{eff}} = \frac{1}{0.693} \approx 1.44 \text{ frames} = \mathbf{58\ ms} $$
+		\end{alertblock}
+	\end{frame}
+
+	\begin{frame}{Problem 1 - Why 58 ms Is A Disaster}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.50\textwidth}
+				\begin{alertblock}{The mismatch}
+					\small
+					Engagement changes over \textbf{seconds}. Our model could see
+					\textbf{58 milliseconds}.
+					\vspace{0.4em}
+
+					That is about one and a half frames. It is like judging whether someone is
+					enjoying a film by looking at a single blink.
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.46\textwidth}
+				\begin{alertblock}{And it gets worse}
+					\small
+					$A_{\log} = \mathbf{0}$ means \emph{every one} of the $N = 16$ state
+					coordinates got the \textbf{same} decay rate.
+					\vspace{0.4em}
+
+					We paid for 16 memories at different timescales and received
+					16 identical copies of one very short memory.
+				\end{alertblock}
+			\end{column}
+		\end{columns}
+		\vspace{0.5em}
+		\centering\small
+		Reference Mamba initialises $\Delta$ between $10^{-3}$ and $10^{-1}$.
+		Ours was $0.693$ - \hl{seven times larger than their maximum}.
+	\end{frame}
+
+	\begin{frame}{Problem 1 - The Fix}
+		\begin{block}{S4D-Real initialisation}
+			\small
+			Give each state coordinate its own decay rate, spread geometrically:
+			$$ A_{\log}[d,n] = \ln(n+1) \;\Longrightarrow\; a_{d,n} = -(n+1), \quad n = 0,\dots,N-1 $$
+			and spread $\Delta$ log-uniformly over $[10^{-3}, 10^{-1}]$ by inverting the softplus,
+			$s_\Delta = \ln(e^{\Delta}-1)$.
+		\end{block}
+		\vspace{0.3em}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{Before}
+					\small
+					$|A|$: one value \\
+					$\tau_{\text{eff}}$: 1.4 frames (58 ms)
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{After (measured)}
+					\small
+					$|A|$: 16 distinct values, $1 \to 16$ \\
+					$\tau_{\text{eff}}$: $10 \to 1000$ frames \\
+					(\hl{0.4 to 40 seconds})
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.4em}
+		\centering\small
+		Two lines of code. The model can now choose its own memory span per channel.
+	\end{frame}
+
+	% ============================== PROBLEM 2 ==============================
+
+	\begin{frame}{\textsc{Problem 2:} The Modalities Never Talked To Each Other}
+		\begin{block}{The whole point of the fusion stage}
+			\small
+			Take the 8 processed streams and let them share information - so the model can
+			notice ``the face says bored \emph{but} the voice says excited''.
+		\end{block}
+		\vspace{0.3em}
+		\begin{alertblock}{What we found}
+			\small
+			We had \textbf{two different architectures}: one described in the paper, one
+			actually running in the code.
+			\vspace{0.3em}
+
+			\hl{They were different from each other, and both were broken - in different ways.}
+		\end{alertblock}
+		\vspace{0.3em}
+		\centering\small
+		This is the embarrassing one. It is also the one with the biggest payoff.
+	\end{frame}
+
+	\begin{frame}{Problem 2a - What The Paper Described}
+		\begin{block}{Lay the 8 streams end to end, scan along that line}
+			\small
+			Each stream is $C' = 128$ channels wide, so the line is $MC' = 1024$ positions long
+			and \textbf{each modality occupies a block of 128}.
+		\end{block}
+		\begin{alertblock}{The telephone game problem}
+			\small
+			To get from one modality to the next, information must survive $C' = 128$ steps.
+			Each step keeps a fraction $\bar{A}$:
+			$$ \bar{A}^{\,C'} = 0.5^{128} \approx 3 \times 10^{-39} $$
+			The smallest number \texttt{float32} can represent is $\approx 1.2 \times 10^{-38}$.
+			\vspace{0.3em}
+
+			\hl{The message does not arrive faint. It arrives as exactly zero.}
+		\end{alertblock}
+		\vspace{0.2em}
+		\centering\small
+		Like whispering down a line of 128 people where each one halves the volume.
+	\end{frame}
+
+	\begin{frame}{Problem 2b - What The Code Actually Did}
+		\begin{block}{Concatenate the modalities as \emph{features}, scan along time}
+			\small
+			Different design. Here modalities \emph{do} mix - through a big dense layer
+			$W \in \R^{MC' \times MC'}$ that touches everything at once. So fusion happens.
+			\vspace{0.3em}
+
+			But two things go wrong.
+		\end{block}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.50\textwidth}
+				\begin{alertblock}{The ordering did nothing}
+					\small
+					Our whole Gumbel-Sinkhorn machinery learns a permutation $P$. But
+					$$ W(P \otimes I_{C'})\,U = W'U, \quad W' := W(P \otimes I_{C'}) $$
+					A dense layer can \textbf{absorb} any reordering into its own weights.
+					The permutation was decorative.
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.46\textwidth}
+				\begin{alertblock}{It ate the whole model}
+					\small
+					$D = MC' = 1024$, and the block has five $1024 \times 1024$ matrices:
+					$$ 5.36\text{M of } 7.20\text{M} = \mathbf{74\%} $$
+					Three quarters of our parameters, on 31 training sessions.
+				\end{alertblock}
+			\end{column}
+		\end{columns}
+	\end{frame}
+
+	\begin{frame}{Problem 2 - The Fix: Make Modality The Sequence}
+		\begin{block}{Stop unpacking modalities into channels}
+			\small
+			Treat each modality's whole $C'$-vector as \textbf{one position}. The sequence is
+			then just the 8 modalities, and we run it once per time step:
+			$$ H^{(t)} = \text{BiMamba}_{\text{modality}}\bigl(\tilde{u}_1^{(t)},\dots,\tilde{u}_M^{(t)}\bigr),
+			\qquad t = 1,\dots,L' $$
+		\end{block}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Distance between modalities}
+					\small
+					Was $C' = 128$ steps $\to$ now \hl{1 step}.
+					\vspace{0.2em}
+
+					Attenuation $\bar{A}^{128} \to \bar{A}$.
+				\end{block}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Parameter cost}
+					\small
+					Was $\Theta(M^2C'^2)$ $\to$ now $\Theta(C'^2)$.
+					\vspace{0.2em}
+
+					$5.36\text{M} \to \mathbf{96{,}640}$ (a $55x$ cut).
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.4em}
+		\centering\small
+		And now the learned ordering \emph{matters}, because the scan really is sequential over modalities.
+	\end{frame}
+
+	% ============================== PROBLEM 3 ==============================
+
+	\begin{frame}{\textsc{Problem 3:} We Predicted The Wrong Thing}
+		\begin{alertblock}{What we were doing}
+			\small
+			The challenge asks for \textbf{each person's} engagement. We were averaging the two
+			into one number and predicting that:
+			$$ \bar{y}_t = \tfrac{1}{2}\bigl(y^{e}_t + y^{n}_t\bigr) $$
+		\end{alertblock}
+		\begin{block}{Why averaging destroys signal}
+			\small
+			With both annotations having variance $\sigma^2$ and correlation $r$:
+			$$ \operatorname{Var}(\bar{y}) = \tfrac{1}{4}\bigl[\sigma^2 + \sigma^2 + 2r\sigma^2\bigr]
+			= \frac{\sigma^2(1+r)}{2} $$
+			If the two people's engagement moves \emph{oppositely}, averaging flattens the curve
+			towards a straight line.
+		\end{block}
+	\end{frame}
+
+	\begin{frame}{Problem 3 - How Bad Is It? The Corpus Paper Measured It}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.52\textwidth}
+				\begin{block}{Expert-novice correlation $r$}
+					\small
+					\begin{tabular}{lrr}
+						Language & $r$ & Variance kept \\
+						\hline
+						German & $-0.19$ & 41\% \\
+						English & $-0.07$ & 47\% \\
+						French & $-0.05$ & 48\% \\
+						Japanese & $+0.51$ & 76\% \\
+					\end{tabular}
+					\vspace{0.3em}
+
+					\footnotesize (Funk et al., 2024, Sec. 5.3.4)
+				\end{block}
+			\end{column}
+			\begin{column}{0.44\textwidth}
+				\begin{alertblock}{Three of four are negative}
+					\small
+					On the European sessions we were throwing away \hl{more than half} the
+					signal before training even started.
+					\vspace{0.3em}
+
+					And CCC divides by the target variance - so this is not recoverable later.
+				\end{alertblock}
+			\end{column}
+		\end{columns}
+		\vspace{0.4em}
+		\centering\small
+		Japanese is the exception; the paper links it to a stronger tendency toward
+		interpersonal harmony.
+	\end{frame}
+
+	\begin{frame}{Problem 3 - The Fix (Easier Than Expected)}
+		\begin{block}{No new machinery needed}
+			\small
+			The two people were \textbf{never mixed on the way in} - their recordings enter as
+			separate streams and stay separately indexed the whole way through.
+			\vspace{0.3em}
+
+			So: attach \hl{one output head per role} instead of one shared head. Each unimodal
+			head is now trained against the person whose stream it reads.
+		\end{block}
+		\vspace{0.3em}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Bonus 1}
+					\small
+					This is what the challenge actually asked for. We were solving a different
+					problem than the one being scored.
+				\end{block}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Bonus 2}
+					\small
+					Gender is per person. With one averaged output, a session where the two
+					differ had \emph{no valid group label} - we were silently dropping those
+					sessions from the fairness metric.
+				\end{block}
+			\end{column}
+		\end{columns}
+	\end{frame}
+
+	% ============================== PROBLEM 4 ==============================
+
+	\begin{frame}{\textsc{Problem 4:} The Loss Function Had Three Bugs}
+		\begin{block}{The old loss, in full}
+			$$ \mathcal{L}_{\text{train}} = \mathcal{L}_{\text{NLL}}(\alpha,\beta,y)
+			\;+\; \lambda_u \sum_{i=1}^{M} \mathcal{L}_{\text{NLL}}(\alpha_i,\beta_i,y),
+			\qquad \lambda_u = 0.5 $$
+		\end{block}
+		\vspace{0.3em}
+		\begin{enumerate}
+			\small
+			\item It rewarded being \emph{calibrated}, but we are scored on being \emph{correlated}
+			\item It paid most attention to the frames the model already knew
+			\item The 8 helper heads outweighed the main head by $4x$
+		\end{enumerate}
+		\vspace{0.4em}
+		\centering\small
+		Bonus defect: nothing in it ever asked the model to be fair.
+	\end{frame}
+
+	\begin{frame}{Bug 4a - Calibrated Is Not The Same As Correlated}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{What the likelihood asks}
+					\small
+					``At \emph{this} frame, is your predicted distribution right?''
+					\vspace{0.3em}
+
+					One frame at a time. Never compares frames to each other.
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{What CCC asks}
+					\small
+					``Across \emph{all} frames, do your predictions go up and down in the same
+					pattern as the truth?''
+					\vspace{0.3em}
+
+					And by Part 2, that is the only thing that can raise our score.
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.5em}
+		\begin{block}{Fix: add the metric itself to the loss}
+			\small
+			$$ \mathcal{L} \;\mathrel{+}=\; \lambda_c\bigl(1 - \widehat{\text{CCC}}\bigr) $$
+			Every ingredient of CCC (two means, two variances, one covariance) is a smooth
+			function of the predictions, so we can just differentiate it.
+		\end{block}
+	\end{frame}
+
+	\begin{frame}{Bug 4b - The Loss Ignored The Hard Frames}
+		\begin{block}{Differentiate the Beta log-likelihood w.r.t. the mean}
+			\small
+			Writing $\mu = \alpha/(\alpha+\beta)$, $\kappa = \alpha+\beta$ (so $\kappa$ = confidence),
+			and using $\partial\alpha/\partial\mu = \kappa$, $\partial\beta/\partial\mu = -\kappa$,
+			the two $\psi(\alpha{+}\beta)$ terms cancel and leave
+			$$ \frac{\partial(-\ln p)}{\partial \mu}
+			= \kappa\left[\ln\frac{1-y}{y} + \psi(\mu\kappa) - \psi((1-\mu)\kappa)\right]
+			\;\propto\; \boldsymbol{\kappa} $$
+		\end{block}
+		\begin{alertblock}{Read that again}
+			\small
+			The correction is multiplied by the model's own confidence. Frames it is
+			\emph{already sure about} produce the biggest updates; uncertain frames produce
+			almost none.
+			\vspace{0.3em}
+
+			\hl{It is a teacher who only helps the students who already understand.}
+		\end{alertblock}
+	\end{frame}
+
+	\begin{frame}{Bug 4b - The Fix, And Why It Needs \texttt{stop\_grad}}
+		\begin{block}{Re-weight each frame}
+			\small
+			$$ w_t = \operatorname{stop\_grad}\bigl(\kappa_t^{-\beta_w}\bigr),
+			\qquad \Longrightarrow \qquad
+			\frac{\partial\mathcal{L}}{\partial\mu} \propto \kappa^{\,1-\beta_w} $$
+			$\beta_w = 0$ is the old behaviour, $\beta_w = 1$ removes confidence weighting
+			entirely. We use $\beta_w = 0.5$.
+		\end{block}
+		\begin{alertblock}{Why the weight must be detached}
+			\small
+			If gradients could flow through $w_t$, the model would spot a shortcut: make
+			$\kappa$ huge, make $w_t$ tiny, and the loss goes down \emph{without predicting
+			anything better}.
+			\vspace{0.3em}
+
+			\texttt{stop\_grad} means ``compute this number, then treat it as a constant''.
+			It rebalances the update without becoming another thing to game.
+		\end{alertblock}
+	\end{frame}
+
+	\begin{frame}{Bug 4c - The Helper Heads Were Running The Show}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{The arithmetic}
+					\small
+					$M = 8$ helper heads, each weighted $\lambda_u = 0.5$:
+					$$ 8 \times 0.5 = 4 $$
+					versus $1$ for the main head.
+					\vspace{0.3em}
+
+					And at test time we \textbf{only use the main head}.
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{The fix}
+					\small
+					Divide by $M$:
+					$$ \frac{\lambda_u}{M}\sum_{i=1}^{M}\mathcal{L}_{\text{NLL}}(\alpha_i,\beta_i,y^{r(i)}) $$
+					Now the helpers contribute $0.5$ total, not $4$, and adding more modalities
+					does not silently change the balance.
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.5em}
+		\centering\small
+		80\% of the gradient was coming from parts of the network we throw away at evaluation.
+	\end{frame}
+
+	\begin{frame}{Bug 4d - We Measured Fairness But Never Asked For It}
+		\begin{block}{CDD is differentiable, so we can train against it}
+			\small
+			Split the batch into $n_b$ quantile bins of the ground truth. Inside each bin,
+			compare the two groups' average predictions:
+			$$ \mathcal{L}_{\text{fair}} =
+			\frac{\sum_{b=1}^{n_b} |\mathcal{B}_b|\bigl(\overline{\hat{\mu}}^{\,A}_b - \overline{\hat{\mu}}^{\,B}_b\bigr)^2}
+			{\sum_{b=1}^{n_b} |\mathcal{B}_b|} $$
+			Squaring removes the sign, so it is smallest exactly when both groups get the same
+			prediction at the same true engagement.
+		\end{block}
+		\begin{alertblock}{Honest caveat}
+			\small
+			This term is \textbf{zero} on a batch containing only one group. Gender is a
+			session-level property, so most of our batches are single-group.
+			\vspace{0.2em}
+
+			It may need window-level shuffling to do anything. Landing it last, and measuring first.
+		\end{alertblock}
+	\end{frame}
+
+	\begin{frame}{The New Loss, All Together}
+		\begin{block}{}
+			$$ \mathcal{L} =
+			\underbrace{\frac{1}{|\mathcal{R}|}\sum_{r} \mathcal{L}^{w}_{\text{NLL}}(\alpha^r,\beta^r,y^r)}_{\text{per-frame fit, rebalanced}}
+			+ \underbrace{\lambda_c(1 - \widehat{\text{CCC}})}_{\text{ordering}}
+			+ \underbrace{\frac{\lambda_u}{M}\sum_{i} \mathcal{L}^{w}_{\text{NLL}}(\alpha_i,\beta_i,y^{r(i)})}_{\text{per-modality}}
+			+ \underbrace{\lambda_f \mathcal{L}_{\text{fair}}}_{\text{fairness}} $$
+		\end{block}
+		\vspace{0.4em}
+		\begin{center}
+			\small
+			\begin{tabular}{lll}
+				\textbf{Term} & \textbf{Asks the model to...} & \textbf{Weight} \\
+				\hline
+				Beta NLL (reweighted) & get each frame's distribution right & $1$, $\beta_w = 0.5$ \\
+				$1 - \widehat{\text{CCC}}$ & rank frames correctly & $\lambda_c = 1.0$ \\
+				Per-modality NLL & keep every stream individually useful & $\lambda_u/M = 0.0625$ \\
+				Squared CDD & treat groups equally at equal truth & $\lambda_f = 0.05$ \\
+			\end{tabular}
+		\end{center}
+	\end{frame}
+
+	% ============================== RESULTS ==============================
+
+	\begin{frame}{What Changed, In Numbers}
+		\begin{center}
+			\small
+			\begin{tabular}{lrr}
+				& \textbf{Before} & \textbf{After} \\
+				\hline
+				Memory span $\tau_{\text{eff}}$ & 1.4 frames (58 ms) & 10--1000 frames (0.4--40 s) \\
+				Distinct decay rates & 1 & 16 \\
+				Cross-modal distance & $C' = 128$ steps & 1 step \\
+				Fusion block parameters & 5{,}360{,}000 (74\%) & 96{,}640 (5.0\%) \\
+				Total parameters & 7{,}197{,}898 & 2{,}064{,}844 \\
+				Output heads & 1 shared & 2 (one per person) \\
+				Loss terms & 2 & 4 \\
+				Permutation actually used & no & yes \\
+			\end{tabular}
+		\end{center}
+		\vspace{0.5em}
+		\centering\small
+		All verified on CPU. Smoke tests pass, forward pass is finite, gradients flow.
+	\end{frame}
+
+	\begin{frame}{Status - Honest Version}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Done \checkmark}
+					\small
+					\begin{itemize}
+						\item All six fixes in code
+						\item Paper rewritten to match
+						\item Structural checks pass
+						\item Parameter counts confirmed
+					\end{itemize}
+				\end{block}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{Not done}
+					\small
+					\begin{itemize}
+						\item \textbf{Nothing has been retrained}
+						\item MICM GPUs occupied by another job ($\sim$75 GB across both cards)
+						\item So: no new CCC number to show you today
+					\end{itemize}
+				\end{alertblock}
+			\end{column}
+		\end{columns}
+		\vspace{0.5em}
+		\begin{center}
+			\begin{tikzpicture}
+				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
+				minimum width=11cm, minimum height=0.9cm, align=center,
+				font=\small\bfseries, text=coolpurple] {
+					I can tell you the model can now do things it previously could not.\\
+					I cannot yet tell you how much that is worth.
+				};
+			\end{tikzpicture}
+		\end{center}
+	\end{frame}
+
+	\begin{frame}{Still Open}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{Blocking}
+					\small
+					\begin{itemize}
+						\item \hl{MPIIGroupInteraction} - we do not have it. It is 1 of the 4
+						test sets, so we currently cap at 3/4 of the score
+						\item GPU availability
+					\end{itemize}
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Known gaps}
+					\small
+					\begin{itemize}
+						\item MC dropout (paper describes it, code has no dropout)
+						\item Hungarian hard permutation - not implemented
+						\item Score matrix missing $1/\sqrt{d_s}$ scaling
+						\item TTA never run end-to-end
+					\end{itemize}
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.5em}
+		\begin{block}{Next, in order}
+			\small
+			1. Retrain with $\eta = 5\times10^{-4}$ once a GPU frees up \quad
+			2. Measure $\rho$, not just CCC \quad
+			3. Ablate the four loss terms \quad
+			4. Chase MPIIGI access
+		\end{block}
+	\end{frame}
+
+	\begin{frame}{What I Would Like From You}
+		\begin{block}{Questions I cannot answer alone}
+			\small
+			\begin{itemize}
+				\item \textbf{MPIIGroupInteraction} - does anyone have a contact who can speed
+				this up? Without it we lose a quarter of the score by default.
+				\item \textbf{Training strategy} - one model on the union of corpora, or separate
+				models per corpus? The challenge requires us to state which. I lean towards one
+				model, but have not tested it.
+				\item \textbf{Batch composition} - the CCC and fairness terms both want batches
+				that span sessions. Reworking the loader is real effort. Worth it?
+			\end{itemize}
+		\end{block}
+		\vspace{0.6em}
+		\begin{center}
+			\Large\bfseries\color{coolpurple} Questions?
+		\end{center}
+	\end{frame}
+
+\end{document}
