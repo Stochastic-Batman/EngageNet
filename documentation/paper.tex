@@ -12,7 +12,7 @@
 
 \begin{document}
 	
-	\title{\textbf{EngageNet Draft}}
+	\title{\textbf{EngageNet: Multi-Modal Engagement Regression with Ordered State-Space Fusion}}
 	\author{Lado Turmanidze}
 	\date{\today}
 	\maketitle
@@ -33,18 +33,20 @@
 	With the four core feature types this yields $M = 8$ input streams. Every subsequent occurrence of $M$ in this document - including the modality-ordering permutation of Section 3 - refers to these role-feature pairs, not to feature types alone.
 	
 	\textbf{Weight sharing across roles.} The two roles observe the same physical signal semantics (an eGeMAPS vector means the same thing whether it was extracted from the expert's or the novice's microphone). Accordingly, the InitEncoder, the uniform channel projection, the intra-modal BiMamba block, and the unimodal Beta head are instantiated \emph{once per feature type} and applied to both roles. Only the inter-modal stage distinguishes the roles, since the permutation is learned over all $M$ role-feature pairs jointly. This halves the parameter count relative to per-role encoders and forces the shared representation to be role-agnostic.
+
+	\textbf{Target construction.} Write $y^{e}_t$ and $y^{n}_t$ for the engagement annotations of the expert and the novice at frame $t$, each in $[0,1]$. The challenge asks for both separately \cite{withanage25}, and we predict both. Suppose both annotations have the same variance $\sigma^2$ and correlation $r$ with each other. Scaling a random variable by $\tfrac{1}{2}$ scales its variance by $\tfrac{1}{4}$, and the variance of a sum is the sum of the variances plus twice the covariance, so
+	$$\operatorname{Var}(\bar{y}) = \tfrac{1}{4}\left[\operatorname{Var}(y^{e}) + \operatorname{Var}(y^{n}) + 2\operatorname{Cov}(y^{e}, y^{n})\right] = \tfrac{1}{4}\left[\sigma^2 + \sigma^2 + 2r\sigma^2\right] = \frac{\sigma^2(1+r)}{2}$$
+	using $\operatorname{Cov}(y^{e}, y^{n}) = r\sigma^2$. The two participants agree only partly, so $r$ is well below $1$ and the averaged curve is markedly flatter than either original: at $r = 0.2$ it keeps $60\%$ of the variance. Since CCC is normalised by the variance of the target (Section 4.1), what is flattened away here cannot be recovered later.
 	
-	\textbf{Target construction.} The per-frame regression target is the mean of the two roles' engagement annotations,
-	$$y_t = \frac{1}{|\mathcal{R}|}\sum_{r\in\mathcal{R}} y_t^{(r)} \in [0,1].$$
-	\textcolor{red}{Note: the MultiMediate challenge specifies frame-wise prediction of \emph{each} interlocutor's engagement \cite{withanage25}. Averaging the two roles into a single trajectory is a simplification of the current implementation and is under review; predicting the two roles separately is expected to raise the attainable CCC.}
-	
+	Predicting both roles needs no new machinery, because the two participants are never mixed on the way in: their recordings enter as separate streams and stay separately indexed throughout. The network therefore ends with one output head per role rather than one shared head, each producing that participant's engagement curve, and each auxiliary per-modality head is trained against the participant whose stream it reads. 
+
 	\subsubsection{Input Standardisation}
 	The raw feature streams occupy vastly different numerical ranges: eGeMAPS v2 $\in [-2.6 \times 10^5, 2.6 \times 10^5$ and OpenFace2 $\in [-3 \times10^4, 3 \times 10^4]$, while W2v-BERT 2.0 embeddings lie within $[-4, 4]$. These magnitudes compound through the encoder and state-space stages, reaching $\sim 10^{11}$ at the cross-modal block and driving the Beta shape parameters to $\sim 10^{14}$, at which point the negative log-likelihood is numerically meaningless and optimisation fails.
 	
 	We therefore standardise every channel to zero mean and unit variance before it enters the network:
 	$$\tilde{x}_{i}^{(c)} = \frac{x_{i}^{(c)} - \mu_{i}^{(c)}}{\sigma_{i}^{(c)}}, \qquad c \in \{1,\dots,C_i\},$$
-	where the per-channel statistics are accumulated in double precision over the \textbf{training split only} and reused unchanged for validation and test. Channels whose standard deviation falls below $10^{-8}$ (constant channels) are centred but not rescaled, avoiding division by zero. Because the two roles share encoder weights, they necessarily share normalisation statistics as well. The statistics are computed once per corpus..
-	
+	where the per-channel statistics are accumulated in double precision over the \textbf{training split only} and reused unchanged for validation and test. Channels whose standard deviation falls below $10^{-8}$ (constant channels) are centred but not rescaled, avoiding division by zero. Because the two roles share encoder weights, they necessarily share normalisation statistics as well. The statistics are computed once per corpus.
+
 	\subsection{Output}
 	For each frame $t$ of the encoded sequence the network emits two strictly positive shape parameters $(\alpha_t, \beta_t)$ that define a Beta predictive density over the bounded engagement scale,
 	$$p(y_t \mid x) = \mathrm{Beta}\bigl(\alpha_t(x),\,\beta_t(x)\bigr), \qquad y_t \in [0,1].$$
@@ -53,6 +55,8 @@
 	while the predictive variance supplies the uncertainty signal consumed by the test-time adaptation filter (Section 2.3). In contrast to \cite{ziyu2025}, where $y$ is a discrete class label represented as a one-hot vector $p(y|x)\in\R^{N}$ over $N$ categories, engagement estimation is a \emph{continuous bounded regression} problem: there is no category axis, and the network output for a window of length $L'$ has shape $(L', 2)$ rather than $(L', N)$.
 	
 	In addition to the fused multimodal head, the network exposes one \emph{unimodal} Beta head per feature type, attached to the corresponding intra-modal representation $u_i$ before fusion. These heads produce $(\alpha_i, \beta_i)$ and serve two purposes: deep supervision during training (Section 2.5) and the teacher-student consistency objective during test-time adaptation (Section 2.6).
+
+	One such head is instantiated per role, so a single forward pass yields $\bigl(\alpha_t^{r}, \beta_t^{r}\bigr)$ for each $r \in \mathcal{R}$. The two heads read the same fused representation and differ only in their read-out weights.
 	
 	\subsection{Inner Workings}
 	We need to capture contextual information from physiological time series simultaneously, and a unidirectional approach cannot fully capture the complex temporal patterns. The multimodal BiMamba network consists of two modules: the intra-modal BiMamba module and the inter-modal BiMamba module. The former is designed to model each modality independently, while the latter effectively fuses multimodal features.
@@ -132,7 +136,7 @@
 		
 		Finally, the log-space parameterisation of $A$ interacts favourably with the scan. Since $\bar{A}_t = \exp(\Delta_t A) \in (0,1)$, the cumulative multipliers $a_t \cdots a_1$ form a decreasing product and cannot overflow, no matter how long the sequence; the worst case is underflow to zero, which is the gentle behaviour of a state that has simply forgotten its distant past. An unconstrained $A$ permitting $|\bar{A}| > 1$ would instead make these partial products grow geometrically in the sequence length, and the tree-structured reduction would surface that divergence just as surely as a serial loop would.
 
-	\item BiMamba applies a linear projection and a \hypertarget{residual}{\textcolor{red}{residual connection}} to integrate bidirectional features and stabilize training:
+	\item BiMamba applies a linear projection and a residual connection to integrate bidirectional features and stabilize training:
 	$$u_{i}=h_{i}+\left(W_{i}^{o}\left(\frac{h_{i}^{\rightarrow}+h_{i}^{\leftarrow}}{2}\right)+b_{i}^{o}\right)\in\R^{L^{\prime}\times C^{\prime}}$$
 	which is the output of the intra-modal BiMamba module for the $i$-th modality. $W_{i}^{o}$ is the weight matrix, and $b_{i}^{o}$ is the bias. Observe that the residual carries the \emph{unnormalised} $h_i$, not $\bar{h}_i$: the layer normalisation of step 1 conditions the block's internal computation without rescaling the identity path.
 	\end{enumerate}
@@ -289,14 +293,22 @@
 	
 	\subsection{Training Objective}
 	
-	Training minimises the Beta negative log-likelihood of the fused multimodal head, augmented by a deep-supervision term applied to every unimodal head:
-	$$
-	\mathcal{L}_{\text{train}} = \mathcal{L}_{\text{NLL}}\bigl(\alpha,\beta,\,y\bigr) \;+\; \lambda_u \sum_{i=1}^{M} \mathcal{L}_{\text{NLL}}\bigl(\alpha_i,\beta_i,\,y\bigr), \qquad \lambda_u = 0.5 .
-	$$
-	Each unimodal head is trained against the same ground-truth engagement target as the fused head. The purpose is twofold: it forces every modality branch to remain individually predictive rather than collapsing into an arbitrary feature basis for the fusion stage, and it produces the calibrated per-modality distributions that the test-time adaptation objective (Section 2.6) consumes as students.
+	The likelihood we train on and the metric we are scored by ask different questions. The Beta negative log-likelihood looks at one frame at a time and asks whether the predicted distribution is right there. CCC looks at all frames together and asks whether the predictions rise and fall in the same pattern as the targets. In theory, a model can place a sensible distribution on every frame and still order the frames badly. We therefore add three terms to the likelihood,
+	$$\mathcal{L} = \underbrace{\frac{1}{|\mathcal{R}|}\sum_{r \in \mathcal{R}} \mathcal{L}_{\text{NLL}}^{w}\bigl(\alpha^{r}, \beta^{r}, y^{r}\bigr)}_{\text{per-frame fit}} \;+\; \underbrace{\lambda_c\bigl(1 - \widehat{\text{CCC}}\bigr)}_{\text{ordering}} \;+\; \underbrace{\frac{\lambda_u}{M}\sum_{i=1}^{M} \mathcal{L}_{\text{NLL}}^{w}\bigl(\alpha_i, \beta_i, y^{r(i)}\bigr)}_{\text{per-modality supervision}} \;+\; \underbrace{\lambda_f\,\mathcal{L}_{\text{fair}}}_{\text{fairness}},$$
+	where $r(i)$ denotes the role of stream $i$, and $\lambda_c, \lambda_u, \lambda_f \ge 0$ set how much each term counts.
 	
-	\textcolor{red}{Note on term balance: with $M = 8$ role-feature pairs and $\lambda_u = 0.5$, the auxiliary terms contribute $8 \times 0.5 = 4$ times the weight of the multimodal term, so the gradient is dominated by the unimodal branches. Whether this is the intended balance - and whether $\lambda_u$ should be annealed towards zero as training progresses - is currently under investigation, since only the multimodal head is used at evaluation time.}
+	\textbf{Reweighting the likelihood.} Describe a Beta density by its mean $\mu = \alpha/(\alpha+\beta)$ and its precision $\kappa = \alpha+\beta$, so $\alpha = \mu\kappa$ and $\beta = (1-\mu)\kappa$; large $\kappa$ means a narrow, confident distribution. Differentiating $\ln p(y) = (\alpha-1)\ln y + (\beta-1)\ln(1-y) - \ln B(\alpha,\beta)$ with respect to $\mu$, with $\partial\alpha/\partial\mu = \kappa$ and $\partial\beta/\partial\mu = -\kappa$, and using $\ln B(\alpha,\beta) = \ln\Gamma(\alpha)+\ln\Gamma(\beta)-\ln\Gamma(\alpha+\beta)$ so that $\partial \ln B/\partial\alpha = \psi(\alpha)-\psi(\alpha+\beta)$ and $\partial \ln B/\partial\beta = \psi(\beta)-\psi(\alpha+\beta)$, the $\psi(\alpha+\beta)$ terms cancel and leave
+	$$\frac{\partial\bigl(-\ln p\bigr)}{\partial \mu} = \kappa\left[\ln\frac{1-y}{y} + \psi(\mu\kappa) - \psi\bigl((1-\mu)\kappa\bigr)\right] \;\propto\; \kappa .$$
+	The correction the mean receives is thus multiplied by the model's own confidence, so frames it is already sure about push hardest and frames it is unsure about barely move it - the opposite of what we want, since the uncertain frames are the ones with something left to learn. This is a known failure of likelihood training with predicted uncertainty \cite{seitzer2022}. We fix it by scaling each frame's loss by $w_t = \kappa_t^{-\beta_w}$, giving $\mathcal{L}_{\text{NLL}}^{w} = \sum_t w_t \mathcal{L}_{\text{NLL},t} / \sum_t w_t$ and a correction proportional to $\kappa^{1-\beta_w}$; $\beta_w = 0$ leaves the likelihood untouched and $\beta_w = 1$ removes the confidence factor completely, and we use $\beta_w = 0.5$. Crucially $w_t$ is computed from the current $\alpha_t, \beta_t$ but treated as a fixed number when derivatives are taken, so no gradient flows back through it. Were it differentiable, the model could shrink the loss by inflating $\kappa$ to make $w_t$ small, rather than by predicting better - the weight is there to rebalance the update, not to become another thing to optimise.
 	
+	\textbf{Ordering term.} $\widehat{\text{CCC}}$ is the sample concordance coefficient of Section 4.1 computed on the predicted means and the targets of the current minibatch, pooled across both roles and all frames in it. Every ingredient - the two means, the two variances, the covariance - is a smooth function of the predictions, so the term can be differentiated, and since $\text{CCC} = \rho\,C_b$, minimising $1-\widehat{\text{CCC}}$ pushes on exactly the factor the likelihood leaves loose. Two limitations follow from estimating it on a batch. It is biased when the batch is small, because the same frames supply both the moments and the ratio built from them; and it reflects the pooled quantity we are scored on only if the batch spans several sessions, since a batch from one session measures ordering within that session alone. Batches are accordingly drawn from windows of several sessions.
+	
+	\textbf{Per-modality supervision.} Each auxiliary head is trained on the target of the role whose stream it reads. This keeps every modality branch predictive in its own right instead of drifting into whatever representation happens to suit the fusion stage, and it supplies the calibrated per-modality distributions that test-time adaptation (Section 2.6) compares against each other. Dividing by $M$ keeps this contribution from growing with the number of streams: at $\lambda_u = 0.5$ and $M$ streams the undivided sum would outweigh the multimodal term by $\lambda_u M$, which for the core configuration is a factor of four - so most of the gradient would come from heads that are thrown away at evaluation time.
+	
+	\textbf{Fairness term.} The Conditional Demographic Disparity of Section 4.2 is built from differences of group averages inside strata of the ground truth, and every step is differentiable, so it can be trained against rather than only measured. Splitting the batch into $n_b$ quantile bins $\mathcal{B}_1,\dots,\mathcal{B}_{n_b}$ of the target, and writing $\overline{\hat{\mu}}^{\,A}_b$ and $\overline{\hat{\mu}}^{\,B}_b$ for each group's mean prediction inside bin $b$, we penalise
+	$$\mathcal{L}_{\text{fair}} = \frac{\sum_{b=1}^{n_b} |\mathcal{B}_b| \left(\overline{\hat{\mu}}^{\,A}_b - \overline{\hat{\mu}}^{\,B}_b\right)^{2}}{\sum_{b=1}^{n_b} |\mathcal{B}_b|},$$
+	with bins missing either group left out of both sums. Squaring removes the sign, so the term is smallest exactly when the two groups get the same prediction at the same true engagement, and weighting by bin size matches how the metric is estimated at evaluation. Note that the penalty is identically zero on a batch containing only one group, so batches must mix groups for it to do anything.
+
 	\subsection{Test-Time Loss Derivations}
 	
 	The TTA objective enforces consistency between the unimodal student heads and the multimodal teacher while still supervising the students toward the multimodal prediction. We define the \textbf{Mutual Information Sharing (MIS) loss} as the KL divergence that pushes each unimodal Beta distribution toward the multimodal one:
@@ -402,7 +414,7 @@
 	The asymmetry of the query-key factorisation is intentional: it allows the model to distinguish between a modality acting as a \emph{context supplier} (the key role) and a modality acting as a \emph{context receiver} (the query role), and assigns independent scores to each direction. A symmetric formulation $Z_{ij} = z_i^\top z_j$ would force $Z = Z^\top$, which in turn constrains the learned permutation matrix $P$ to be symmetric. The only symmetric permutation matrices are \emph{involutions} - permutations that are their own inverse ($\pi = \pi^{-1}$), corresponding to products of disjoint transpositions (swaps). This would unnecessarily halve the space of learnable orderings, excluding, for example, cyclic permutations of three or more modalities.
 	
 	\subsubsection*{Gumbel perturbation}
-	The Gumbel distribution is classically used in extreme value theory to model the asymptotic distribution of the maximum of a sequence of independent and identically distributed random variables. Its probability density function for location $\mu$ and scale $\beta$ is given by: 
+	The Gumbel distribution is classically used in extreme value theory \cite{gumbel1954} to model the asymptotic distribution of the maximum of a sequence of independent and identically distributed random variables. Its probability density function for location $\mu$ and scale $\beta$ is given by: 
 	$$f(x) = \frac{1}{\beta} e^{-(x-\mu)/\beta} e^{-e^{-(x-\mu)/\beta}}$$ 
 	In deep learning, the Gumbel-Max trick \cite{jang2017} leverages this distribution to draw discrete samples from a categorical distribution in a fully differentiable manner. By adding independent Gumbel noise to unnormalized log-probabilities (scores), the deterministic argmax of these perturbed values becomes mathematically equivalent to drawing a sample from the true underlying multinomial distribution. 
 	
@@ -511,6 +523,9 @@
 	
 	\textbf{Applicability.} $\text{CDD}_G$ requires exactly two gender codes to be present in the evaluated split, and $\text{CDD}_L$ requires at least two languages; where a split does not satisfy these conditions the corresponding metric is undefined and is reported as such rather than as zero. Note also that the sign of $\text{CDD}_G$ depends on which annotation code denotes male, which must be resolved against the corpus metadata; the magnitude is invariant to this choice. We acknowledge, following \cite{withanage25}, that gender is not binary; the corpora provide only male/female self-identifications.
 
+	Because every step in the estimator is differentiable, CDD is not only measured but trained against: a squared form of it appears as the fairness term of Section 2.5.
+
+	\newpage
 	\section{Hyperparameters}
 	
 	The following values define the reference configuration. All are exposed as command-line overrides.
@@ -549,6 +564,10 @@
 		-- & Batch size & $8$ \\
 		-- & Maximum epochs & $50$ \\
 		-- & Early-stopping patience (epochs, on val CCC) & $10$ \\
+		$\lambda_c$ & Weight of the ranking (CCC) term & $1.0$ \\
+		$\lambda_u$ & Unimodal deep-supervision weight (before $1/M$) & $0.5$ \\
+		$\lambda_f$ & Fairness penalty weight & $0.05$ \\
+		$\beta_w$ & Likelihood reweighting exponent & $0.5$ \\
 		\midrule
 		\multicolumn{3}{l}{\textit{Test-time adaptation}} \\
 		$\lambda$ & Pseudo-label supervision weight in $\mathcal{L}_{TTA}$ & $1.0$ \\
@@ -567,9 +586,6 @@
 		
 		\bibitem{ziyu2025}
 		Ziyu Jia et al., \emph{A Multimodal BiMamba Network with Test-Time Adaptation for Emotion Recognition Based on Physiological Signals}, 39th Conference on Neural Information Processing Systems (NeurIPS 2025).
-		
-		\bibitem{xie2026mhc}
-		Zhenda Xie et al., \emph{mHC: Manifold-Constrained Hyper-Connections}, arXiv preprint arXiv:2512.24880v2 (2026).
 		
 		\bibitem{gu2023mamba}
 		Albert Gu and Tri Dao, \emph{Mamba: Linear-Time Sequence Modeling with Selective State Spaces}, arXiv preprint arXiv:2312.00752 (2024).
@@ -625,6 +641,8 @@
 		\bibitem{gu2022s4d} Albert Gu, Ankit Gupta, Karan Goel, and Christopher R\'{e}, \emph{On the Parameterization and Initialization of Diagonal State Space Models}, Advances in Neural Information Processing Systems (NeurIPS 2022), 35, 35971--35983.
 
 		\bibitem{oppenheim1997} Alan V. Oppenheim, Alan S. Willsky, and S. Hamid Nawab, \emph{Signals and Systems}, 2nd edition, Prentice Hall (1997).
+
+		\bibitem{seitzer2022} Maximilian Seitzer, Arash Tavakoli, Dimitrije Antic, and Georg Martius, \emph{On the Pitfalls of Heteroscedastic Uncertainty Estimation with Probabilistic Neural Networks}, International Conference on Learning Representations (ICLR 2022).
 	\end{thebibliography}
 	
 \end{document}
