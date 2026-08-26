@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import math
 import numpy as np
+import pandas as pd
 
 from pathlib import Path
 from scipy.interpolate import interp1d
@@ -135,7 +136,18 @@ class EngageNetDataset:
         for role in ROLES:
             eng = session[role].get("engagement")
             if eng is not None:
-                arr = eng.values.astype(np.float32)
+                # NoXi annotations contain NaN strings like: ('-nan(ind)', 'nan');
+                # coerce them to real NaN, then interpolate across the gaps.
+                arr = pd.to_numeric(pd.Series(eng.values), errors="coerce").to_numpy(dtype=np.float32)
+                n_bad = int(np.isnan(arr).sum())
+                if n_bad:
+                    if n_bad == arr.size:
+                        log.warning(f"Session {session_dir.name}: {role}.engagement is entirely NaN, skipping session")
+                        return
+                    log.warning(f"Session {session_dir.name}: {role}.engagement has {n_bad}/{arr.size} NaN frames, interpolating")
+                    s = pd.Series(arr).interpolate(method="linear", limit_direction="both")
+                    arr = s.to_numpy(dtype=np.float32)
+
                 # engagement is annotated at 25 Hz
                 arr = _resample(arr.reshape(-1, 1), 25.0, cnfg.target_sr).squeeze(-1)
                 engagement[role] = arr[:common_T]
