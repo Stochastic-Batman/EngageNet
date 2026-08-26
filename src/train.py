@@ -13,7 +13,7 @@ from pathlib import Path
 from beta_head import beta_nll_weights, nll_loss, predictive_mean
 from config import EngageNetConfig
 from data_loader import iter_batches
-from metrics import ccc_jnp, cdd_gender, cdd_language, ccc, fairness_penalty
+from metrics import ccc_jnp, cdd_gender, cdd_language, ccc, fairness_penalty, pearson
 from model import EngageNet
 from read_data import log, ROLES, read_scalar_annotation
 
@@ -104,12 +104,14 @@ def eval_step(state: TrainState, batch: dict[str, jax.Array], tau: float) -> dic
     return {role: predictive_mean(a, b) for role, (a, b) in multimodal.items()}
 
 
-def val_metrics(state: TrainState, cnfg: EngageNetConfig, tau: float) -> tuple[float, float | None, dict[str, float]]:
+def val_metrics(state: TrainState, cnfg: EngageNetConfig, tau: float) -> tuple[float, float, dict[str, tuple[float, float]], float | None, dict[str, float]]:
     """Return (CCC, CDD_G, CDD_L) over the val split, pooled across both roles.
 
     Gender is carried per participant in the batch, so a session whose two participants differ is no longer discarded.
     """
     all_preds, all_targets, all_genders, all_languages = [], [], [], []
+    role_preds = {r: [] for r in ROLES}
+    role_targets = {r: [] for r in ROLES}
 
     for batch in iter_batches(cnfg, split="val"):
         preds = eval_step(state, _drop_meta(batch), tau)  # dict{role: (B, L')}
@@ -128,10 +130,20 @@ def val_metrics(state: TrainState, cnfg: EngageNetConfig, tau: float) -> tuple[f
             all_targets.append(t.reshape(-1))
             all_genders.append(np.repeat(g, L).astype(np.int8))
             all_languages.append(np.repeat(langs, L))
+            role_preds[role].append(p.reshape(-1))
+            role_targets[role].append(t.reshape(-1))
 
     preds = np.concatenate(all_preds)
     targs = np.concatenate(all_targets)
     v_ccc = ccc(preds, targs)
+    v_rho = pearson(preds, targs)
+
+    per_role = {}
+    for role in ROLES:
+        if role_preds.get(role):
+            p_r = np.concatenate(role_preds[role])
+            t_r = np.concatenate(role_targets[role])
+            per_role[role] = (ccc(p_r, t_r), pearson(p_r, t_r))
 
     genders = np.concatenate(all_genders)
     known = genders >= 0
@@ -140,7 +152,7 @@ def val_metrics(state: TrainState, cnfg: EngageNetConfig, tau: float) -> tuple[f
     langs_all = np.concatenate(all_languages)
     v_cdd_l = cdd_language(preds, targs, langs_all) if len(np.unique(langs_all)) > 1 else {}
 
-    return v_ccc, v_cdd_g, v_cdd_l
+    return v_ccc, v_rho, per_role, v_cdd_g, v_cdd_l
 
 
 def create_train_state(cnfg: EngageNetConfig, rng: jax.Array) -> TrainState:
@@ -193,13 +205,15 @@ def main() -> None:
 
         # Validation
         if (epoch + 1) % cnfg.eval_every == 0:
-            v_ccc, v_cdd_g, v_cdd_l = val_metrics(state, cnfg, tau)
+            v_ccc, v_rho, per_role, v_cdd_g, v_cdd_l = val_metrics(state, cnfg, tau)
             extra = ""
+            if per_role:
+                extra += "  " + " ".join(f"{r}[ccc={c:+.3f} rho={p:+.3f}]" for r, (c, p) in sorted(per_role.items()))
             if v_cdd_g is not None:
                 extra += f"  cdd_g={v_cdd_g:+.4f}"
             if v_cdd_l:
                 extra += "  cdd_l[" + " ".join(f"{k}={v:+.3f}" for k, v in sorted(v_cdd_l.items())) + "]"
-            log.info(f"Epoch {epoch+1:3d}/{cnfg.n_epochs}  tau={tau:.4f}  loss={avg_loss:.4f}  val_ccc={v_ccc:.4f}{extra}")
+            log.info(f"Epoch {epoch+1:3d}/{cnfg.n_epochs}  tau={tau:.4f}  loss={avg_loss:.4f}  val_ccc={v_ccc:.4f}  rho={v_rho:.4f}{extra}")
 
             if v_ccc > best_val_ccc:
                 best_val_ccc = v_ccc

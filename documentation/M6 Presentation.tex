@@ -61,8 +61,8 @@
 				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
 				minimum width=11cm, minimum height=1.0cm, align=center,
 				font=\small\bfseries, text=coolpurple] {
-					All six are now fixed in code. The paper has been rewritten to match.\\
-					Nothing has been retrained yet - the GPUs are busy.
+					All six are fixed, the paper is rewritten, and it has now been retrained.\\
+					Best validation CCC went from \textbf{0.0227} to \textbf{0.4228}.
 				};
 			\end{tikzpicture}
 		\end{center}
@@ -77,7 +77,8 @@
 			\item \textbf{Problem 2} - the modalities never talked to each other
 			\item \textbf{Problem 3} - we predicted the wrong thing
 			\item \textbf{Problem 4} - the loss function had three bugs
-			\item \textbf{Results \& what is still open}
+			\item \textbf{Results} - what the retrained model actually does
+			\item \textbf{What is still open} - including one thing we got wrong
 		\end{enumerate}
 	\end{frame}
 
@@ -777,11 +778,78 @@
 				Output heads & 1 shared & 2 (one per person) \\
 				Loss terms & 2 & 4 \\
 				Permutation actually used & no & yes \\
+				\hline
+				\textbf{Best validation CCC} & \textbf{0.0227} & \textbf{0.4228} \\
 			\end{tabular}
 		\end{center}
 		\vspace{0.5em}
 		\centering\small
-		All verified on CPU. Smoke tests pass, forward pass is finite, gradients flow.
+		An $18.6\times$ improvement. Same data, same optimiser, same window length.
+	\end{frame}
+
+	\begin{frame}{\textsc{Part 3:} The Retrained Run}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.46\textwidth}
+				\begin{block}{Run summary}
+					\small
+					\begin{tabular}{lr}
+						Wall time & 36 min 38 s \\
+						XLA compile & 6 min 35 s \\
+						Per epoch & $\sim$73 s \\
+						Epochs run & 25 of 50 \\
+						Early stop & patience 10 \\
+						Best epoch & \hl{15} \\
+					\end{tabular}
+				\end{block}
+			\end{column}
+			\begin{column}{0.50\textwidth}
+				\begin{block}{Best epoch (15)}
+					\small
+					\begin{tabular}{lr}
+						val CCC & \hl{0.4228} \\
+						$\text{CDD}_G$ & $+0.0053$ \\
+						$\text{CDD}_L$ (Chinese) & $-0.027$ \\
+						$\text{CDD}_L$ (Japanese) & $+0.009$ \\
+					\end{tabular}
+					\vspace{0.3em}
+
+					\footnotesize Our own success criterion was $\text{CDD} \le 0.05$.
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.4em}
+		\centering\small
+		Fairness is comfortably inside target. Accuracy is the part still moving.
+	\end{frame}
+
+	\begin{frame}{The Run Was Unstable - And Trained On The Wrong Corpus}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.50\textwidth}
+				\begin{alertblock}{Validation CCC bounced hard}
+					\footnotesize
+					$0.10 \to 0.25 \to 0.19 \to 0.09 \to 0.24 \to 0.24 \to 0.37 \to 0.38$
+					$\to 0.25 \to 0.21 \to 0.08 \to 0.08 \to 0.34 \to 0.33 \to \mathbf{0.42} \to 0.29 \dots$
+					\vspace{0.3em}
+
+					\small Meanwhile training loss fell \emph{monotonically},
+					$0.058 \to -0.503$. Smooth loss, thrashing metric.
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.46\textwidth}
+				\begin{alertblock}{And the corpus problem}
+					\small
+					The log shows only \texttt{NoXi+J/train} and \texttt{NoXi+J/val}.
+					Languages: Japanese and Chinese only.
+					\vspace{0.3em}
+
+					\hl{NoXi was never loaded.} The model has never seen a European session.
+				\end{alertblock}
+			\end{column}
+		\end{columns}
+		\vspace{0.4em}
+		\centering\small
+		So $0.4228$ is an \emph{in-domain} number on Asian data. Cross-cultural transfer -
+		the entire point of the TTA design - remains untested.
 	\end{frame}
 
 	\begin{frame}{Status - Honest Version}
@@ -792,18 +860,20 @@
 					\begin{itemize}
 						\item All six fixes in code
 						\item Paper rewritten to match
-						\item Structural checks pass
-						\item Parameter counts confirmed
+						\item Retrained end to end
+						\item CCC $0.0227 \to 0.4228$
+						\item CDD inside target on both axes
 					\end{itemize}
 				\end{block}
 			\end{column}
 			\begin{column}{0.48\textwidth}
-				\begin{alertblock}{Not done}
+				\begin{alertblock}{Caveats on that number}
 					\small
 					\begin{itemize}
-						\item \textbf{Nothing has been retrained}
-						\item MICM GPUs occupied by another job ($\sim$75 GB across both cards)
-						\item So: no new CCC number to show you today
+						\item NoXi+J only - no European data
+						\item Val split is 10 sessions; noisy
+						\item Not comparable to the $0.400$ baseline, which is a mean over four \emph{test} sets
+						\item Overfits after epoch 15
 					\end{itemize}
 				\end{alertblock}
 			\end{column}
@@ -814,8 +884,8 @@
 				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
 				minimum width=11cm, minimum height=0.9cm, align=center,
 				font=\small\bfseries, text=coolpurple] {
-					I can tell you the model can now do things it previously could not.\\
-					I cannot yet tell you how much that is worth.
+					The fixes clearly worked. Whether the model is competitive\\
+					is a different question, and one we cannot answer yet.
 				};
 			\end{tikzpicture}
 		\end{center}
@@ -828,8 +898,8 @@
 					\small
 					\begin{itemize}
 						\item \hl{MPIIGroupInteraction} - we do not have it. It is 1 of the 4
-						test sets, so we currently cap at 3/4 of the score
-						\item GPU availability
+						test sets, so we cap at 3/4 of the score
+						\item TTA still never run end-to-end - and it is our headline contribution
 					\end{itemize}
 				\end{alertblock}
 			\end{column}
@@ -837,10 +907,10 @@
 				\begin{block}{Known gaps}
 					\small
 					\begin{itemize}
-						\item MC dropout (paper describes it, code has no dropout)
-						\item Hungarian hard permutation - not implemented
-						\item Score matrix missing $1/\sqrt{d_s}$ scaling
-						\item TTA never run end-to-end
+						\item No per-role or $\rho$ logging - cannot tell if the two heads collapsed
+						\item MC dropout (paper describes it, code has none)
+						\item Hungarian hard permutation
+						\item Score matrix missing $1/\sqrt{d_s}$
 					\end{itemize}
 				\end{block}
 			\end{column}
@@ -848,10 +918,11 @@
 		\vspace{0.5em}
 		\begin{block}{Next, in order}
 			\small
-			1. Retrain with $\eta = 5\times10^{-4}$ once a GPU frees up \quad
-			2. Measure $\rho$, not just CCC \quad
-			3. Ablate the four loss terms \quad
-			4. Chase MPIIGI access
+			1. Train on \textbf{NoXi} \quad
+			2. Log per-role CCC and $\rho$ \quad
+			3. Stabilise: $\eta = 2\times10^{-4}$, patience 5 \quad
+			4. \textbf{Run TTA NoXi $\to$ NoXi+J} \quad
+			5. Ablate the four loss terms
 		\end{block}
 	\end{frame}
 
@@ -862,10 +933,10 @@
 				\item \textbf{MPIIGroupInteraction} - does anyone have a contact who can speed
 				this up? Without it we lose a quarter of the score by default.
 				\item \textbf{Training strategy} - one model on the union of corpora, or separate
-				models per corpus? The challenge requires us to state which. I lean towards one
-				model, but have not tested it.
-				\item \textbf{Batch composition} - the CCC and fairness terms both want batches
-				that span sessions. Reworking the loader is real effort. Worth it?
+				models per corpus? The challenge requires us to declare which. Now that a run costs
+				about an hour we can simply test both, but I would like agreement on the criterion first.
+				\item \textbf{Val split size} - 10 sessions gives a CCC estimate that swings by
+				$0.3$ between epochs. Do we accept that noise, or move to cross-validation?
 			\end{itemize}
 		\end{block}
 		\vspace{0.6em}

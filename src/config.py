@@ -155,6 +155,15 @@ class EngageNetConfig:
         parser.add_argument("--gs-dim", type=int, default=64)
         parser.add_argument("--gs-iters", type=int, default=10)
         parser.add_argument("--beta-hidden", type=int, default=128)
+        parser.add_argument("--checkpoint-dir", type=str, default=None)
+        parser.add_argument("--lambda-ccc", type=float, default=1.0)
+        parser.add_argument("--lambda-uni", type=float, default=0.5)
+        parser.add_argument("--lambda-fair", type=float, default=0.05)
+        parser.add_argument("--beta-w", type=float, default=0.5)
+        parser.add_argument("--cdd-bins", type=int, default=10)
+        parser.add_argument("--dt-min", type=float, default=1e-3)
+        parser.add_argument("--dt-max", type=float, default=1e-1)
+        parser.add_argument("--cross-modal-conv-kernel", type=int, default=2)
         args = parser.parse_args()
 
         return cls(
@@ -183,4 +192,13 @@ class EngageNetConfig:
             gs_dim=args.gs_dim,
             gs_iters=args.gs_iters,
             beta_hidden=args.beta_hidden,
+            checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else cls.checkpoint_dir,
+            lambda_ccc=args.lambda_ccc,
+            lambda_uni=args.lambda_uni,
+            lambda_fair=args.lambda_fair,
+            beta_w=args.beta_w,
+            cdd_bins=args.cdd_bins,
+            dt_min=args.dt_min,
+            dt_max=args.dt_max,
+            cross_modal_conv_kernel=args.cross_modal_conv_kernel,
         )

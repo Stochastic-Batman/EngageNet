@@ -99,3 +99,10 @@ def fairness_penalty(predictions: jnp.ndarray, targets: jnp.ndarray, groups: jnp
         den = den + w
 
     return num / jnp.maximum(den, 1.0)
+
+
+# predictions: (N,) ; targets: (N,) -> scalar
+def pearson(predictions: np.ndarray, targets: np.ndarray) -> float:
+    if predictions.std() < 1e-8 or targets.std() < 1e-8:
+        return 0.0
+    return float(np.corrcoef(predictions, targets)[0, 1])
