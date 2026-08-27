@@ -5,6 +5,7 @@
 \usepackage{amssymb}
 \usepackage{graphicx}
 \usepackage{tikz}
+\newfontfamily\georgianfont{Noto Sans Georgian}
 \usetikzlibrary{shapes.geometric, arrows.meta, positioning}
 
 \definecolor{coolpurple}{HTML}{7f65a0}
@@ -48,7 +49,7 @@
 	\end{frame}
 
 	\begin{frame}{The Short Version}
-		\begin{block}{What happened since May}
+		\begin{block}{What happened since the last meeting}
 			The model was built, it trained, and it produced numbers - but the numbers were bad.
 			\vspace{0.4em}
 
@@ -147,7 +148,7 @@
 		\end{center}
 	\end{frame}
 
-	\begin{frame}{Recap - Architecture (as of May)}
+	\begin{frame}{Recap - Architecture}
 		\centering
 		\begin{tikzpicture}[
 			node distance=0.55cm,
@@ -297,22 +298,22 @@
 	\begin{frame}{What The Theorem Told Us}
 		\begin{columns}[onlytextwidth]
 			\begin{column}{0.48\textwidth}
-				\begin{block}{Our numbers}
+				\begin{alertblock}{Where we were (2 weeks ago)}
 					\small
 					$$ \rho = 0.229, \qquad \text{CCC} = 0.21 $$
 					$$ \implies C_b = \frac{0.21}{0.229} \approx 0.92 $$
-					We were already \hl{92\% calibrated}.
-				\end{block}
+					Already $92\%$ calibrated - so rescaling the output could buy at most
+					$0.229 - 0.21 = 0.02$.
+				\end{alertblock}
 			\end{column}
 			\begin{column}{0.48\textwidth}
-				\begin{alertblock}{So what does that mean}
+				\begin{block}{Where we are now (NoXi, epoch 16)}
 					\small
-					Fiddling with output scaling could buy us at most $0.229 - 0.21 = 0.02$.
-					\vspace{0.3em}
-
-					Every remaining point has to come from $\rho$ - from the model getting the
-					\emph{ordering} of frames right.
-				\end{alertblock}
+					$$ \rho = 0.7951, \qquad \text{CCC} = 0.7942 $$
+					$$ \implies C_b = \frac{0.7942}{0.7951} = \hl{0.9989} $$
+					Calibration is now essentially perfect. The gap the theorem said was
+					closable, we closed.
+				\end{block}
 			\end{column}
 		\end{columns}
 		\vspace{0.6em}
@@ -321,8 +322,8 @@
 				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
 				minimum width=11cm, minimum height=0.9cm, align=center,
 				font=\small\bfseries, text=coolpurple] {
-					The model could not tell engaged moments from bored ones.\\
-					Everything that follows is about \emph{why not}.
+					2 weeks ago the problem was ranking, not scale. Everything that follows\\
+					is about \emph{why the model could not rank} - and what we did about it.
 				};
 			\end{tikzpicture}
 		\end{center}
@@ -334,16 +335,17 @@
 		\begin{block}{How long does an SSM remember?}
 			\small
 			Stop feeding it input. Then $\xi_{t_0+k} = \bar{A}^{\,k}\,\xi_{t_0}$: memory decays
-			geometrically. The standard measure is how long until it drops to $e^{-1}$:
-			$$ \bar{A}^{\,\tau_{\text{eff}}} = e^{-1} \;\Longrightarrow\;
-			\tau_{\text{eff}} = \frac{-1}{\ln \bar{A}} = \frac{1}{\Delta|A|} $$
+			geometrically. Define $\tau_{\text{eff}}$ as the number of steps until only $e^{-1}$
+			($\approx 37\%$) of it survives - the standard time constant of a decaying response.
+			$$ \bar{A}^{\,\tau_{\text{eff}}} = e^{-1}
+			\;\Longrightarrow\; \tau_{\text{eff}}\ln\bar{A} = -1
+			\;\Longrightarrow\; \tau_{\text{eff}} = \frac{-1}{\ln \bar{A}} $$
+			Now substitute $\bar{A} = \exp(\Delta A)$, so $\ln\bar{A} = \Delta A$. Since $A < 0$ by
+			construction, write $A = -|A|$, giving $\ln\bar{A} = -\Delta|A|$ and therefore
+			$$ \tau_{\text{eff}} = \frac{-1}{-\Delta|A|} = \frac{1}{\Delta\,|A|} $$
+			Here $\Delta > 0$ is the \hl{discretisation timestep}: how much continuous time one
+			discrete step represents. Small $\Delta$ = fine steps = slow forgetting = long memory.
 		\end{block}
-		\begin{alertblock}{Now plug in what we actually initialised}
-			\small
-			We set $A_{\log} = 0$ and $s_\Delta = 0$. That gives $|A| = e^0 = 1$ and
-			$\Delta = \text{softplus}(0) = \ln 2 \approx 0.693$, so
-			$$ \tau_{\text{eff}} = \frac{1}{0.693} \approx 1.44 \text{ frames} = \mathbf{58\ ms} $$
-		\end{alertblock}
 	\end{frame}
 
 	\begin{frame}{Problem 1 - Why 58 ms Is A Disaster}
@@ -380,32 +382,35 @@
 	\begin{frame}{Problem 1 - The Fix}
 		\begin{block}{S4D-Real initialisation}
 			\small
-			Give each state coordinate its own decay rate, spread geometrically:
-			$$ A_{\log}[d,n] = \ln(n+1) \;\Longrightarrow\; a_{d,n} = -(n+1), \quad n = 0,\dots,N-1 $$
-			and spread $\Delta$ log-uniformly over $[10^{-3}, 10^{-1}]$ by inverting the softplus,
-			$s_\Delta = \ln(e^{\Delta}-1)$.
+			Index channels by $d \in \{1,\dots,C'\}$ and, within each channel, state coordinates by
+			$n \in \{0,\dots,N-1\}$ (we use $C' = 128$ channels, $N = 16$ coordinates each). Give
+			every coordinate its own decay rate:
+			$$ A_{\log}[d,n] = \ln(n+1) \;\Longrightarrow\; a_{d,n} = -(n+1) \;\in\; \{-1,\dots,-16\} $$
+			and spread $\Delta$ log-uniformly over $[10^{-3},\,10^{-1}]$ per channel.
 		\end{block}
-		\vspace{0.3em}
+		\vspace{0.2em}
 		\begin{columns}[onlytextwidth]
-			\begin{column}{0.48\textwidth}
+			\begin{column}{0.44\textwidth}
 				\begin{alertblock}{Before}
 					\small
-					$|A|$: one value \\
-					$\tau_{\text{eff}}$: 1.4 frames (58 ms)
+					$\Delta = 0.693$ and $|A| = 1$, for \emph{every} $d$ and $n$.
+					$$ \tau_{\text{eff}} = \tfrac{1}{0.693 \times 1} = 1.4 \text{ frames} $$
+					One timescale, 58 ms.
 				\end{alertblock}
 			\end{column}
-			\begin{column}{0.48\textwidth}
-				\begin{block}{After (measured)}
+			\begin{column}{0.52\textwidth}
+				\begin{block}{After (measured at init)}
 					\small
-					$|A|$: 16 distinct values, $1 \to 16$ \\
-					$\tau_{\text{eff}}$: $10 \to 1000$ frames \\
-					(\hl{0.4 to 40 seconds})
+					$\Delta$ alone spans $\tau_{\text{eff}} = 1/\Delta \in [10, 1000]$ frames; the
+					$|A| \in [1,16]$ ladder divides that by up to $16$, so coordinates cover
+					$\approx 0.6$ to $1000$ frames.
+					\vspace{0.2em}
+
+					At $25$ Hz one frame is $40$ ms, so $10$ frames $= 0.4$ s and $1000$ frames
+					$= \hl{40}$ \hl{s}.
 				\end{block}
 			\end{column}
 		\end{columns}
-		\vspace{0.4em}
-		\centering\small
-		Two lines of code. The model can now choose its own memory span per channel.
 	\end{frame}
 
 	% ============================== PROBLEM 2 ==============================
@@ -438,11 +443,13 @@
 		\end{block}
 		\begin{alertblock}{The telephone game problem}
 			\small
-			To get from one modality to the next, information must survive $C' = 128$ steps.
-			Each step keeps a fraction $\bar{A}$:
+			Information from one modality must survive $C' = 128$ steps to reach the next, and each
+			step keeps a fraction $\bar{A}$. That fraction is the \emph{same} number from
+			Problem 1: at initialisation $\bar{A} = \exp(\Delta A) = \exp(-0.693 \times 1) = 0.5$.
+			So
 			$$ \bar{A}^{\,C'} = 0.5^{128} \approx 3 \times 10^{-39} $$
-			The smallest number \texttt{float32} can represent is $\approx 1.2 \times 10^{-38}$.
-			\vspace{0.3em}
+			and the smallest number \texttt{float32} can represent is $\approx 1.2 \times 10^{-38}$.
+			\vspace{0.2em}
 
 			\hl{The message does not arrive faint. It arrives as exactly zero.}
 		\end{alertblock}
@@ -484,34 +491,33 @@
 	\begin{frame}{Problem 2 - The Fix: Make Modality The Sequence}
 		\begin{block}{Stop unpacking modalities into channels}
 			\small
-			Treat each modality's whole $C'$-vector as \textbf{one position}. The sequence is
-			then just the 8 modalities, and we run it once per time step:
+			\textbf{Before:} modality $i$ was split into its $128$ individual channels, laid end to
+			end, so it occupied \emph{positions} $[(i{-}1)C',\; iC')$ of a $1024$-long sequence.
+			\textbf{After:} at each time step $t$, modality $i$'s whole $C'$-dimensional vector
+			$\tilde{u}_i^{(t)}$ is \emph{one} position. The sequence is the $M = 8$ modalities:
 			$$ H^{(t)} = \text{BiMamba}_{\text{modality}}\bigl(\tilde{u}_1^{(t)},\dots,\tilde{u}_M^{(t)}\bigr),
 			\qquad t = 1,\dots,L' $$
+			So neighbouring modalities go from $C' = 128$ steps apart to \hl{1 step apart} - not by
+			shortening the path, but by no longer inserting 127 irrelevant positions into it.
 		\end{block}
 		\begin{columns}[onlytextwidth]
-			\begin{column}{0.48\textwidth}
-				\begin{block}{Distance between modalities}
+			\begin{column}{0.46\textwidth}
+				\begin{block}{What happened to $P$?}
 					\small
-					Was $C' = 128$ steps $\to$ now \hl{1 step}.
-					\vspace{0.2em}
-
-					Attenuation $\bar{A}^{128} \to \bar{A}$.
+					\textbf{Nothing was removed.} $P$ was absorbable only because a \emph{dense
+					layer} followed it. Now an \emph{SSM scan} follows it, and scans are
+					order-sensitive - so $P$ decides which modality supplies context to which.
 				\end{block}
 			\end{column}
-			\begin{column}{0.48\textwidth}
-				\begin{block}{Parameter cost}
+			\begin{column}{0.50\textwidth}
+				\begin{block}{And it got cheaper}
 					\small
-					Was $\Theta(M^2C'^2)$ $\to$ now $\Theta(C'^2)$.
-					\vspace{0.2em}
-
-					$5.36\text{M} \to \mathbf{96{,}640}$ (a $55x$ cut).
+					Fusion block width drops from $MC'$ to $C'$:
+					$$ \Theta(M^2C'^2) \to \Theta(C'^2) $$
+					$5.36$M $\to$ $96{,}640$ parameters.
 				\end{block}
 			\end{column}
 		\end{columns}
-		\vspace{0.4em}
-		\centering\small
-		And now the learned ordering \emph{matters}, because the scan really is sequential over modalities.
 	\end{frame}
 
 	% ============================== PROBLEM 3 ==============================
@@ -534,35 +540,43 @@
 	\end{frame}
 
 	\begin{frame}{Problem 3 - How Bad Is It? The Corpus Paper Measured It}
+		\begin{block}{``Variance kept'' means what fraction of the wiggle survives averaging}
+			\small
+			From the previous slide, $\operatorname{Var}(\bar{y}) = \sigma^2(1+r)/2$. Dividing by
+			$\sigma^2$, the fraction kept is $(1+r)/2$. Engagement that never moves is
+			unpredictable by construction, so this is signal we destroy before training starts.
+		\end{block}
+		\vspace{0.2em}
 		\begin{columns}[onlytextwidth]
-			\begin{column}{0.52\textwidth}
+			\begin{column}{0.50\textwidth}
 				\begin{block}{Expert-novice correlation $r$}
 					\small
 					\begin{tabular}{lrr}
-						Language & $r$ & Variance kept \\
+						Language & $r$ & $(1+r)/2$ \\
 						\hline
 						German & $-0.19$ & 41\% \\
 						English & $-0.07$ & 47\% \\
 						French & $-0.05$ & 48\% \\
 						Japanese & $+0.51$ & 76\% \\
 					\end{tabular}
-					\vspace{0.3em}
+					\vspace{0.2em}
 
 					\footnotesize (Funk et al., 2024, Sec. 5.3.4)
 				\end{block}
 			\end{column}
-			\begin{column}{0.44\textwidth}
+			\begin{column}{0.46\textwidth}
 				\begin{alertblock}{Three of four are negative}
 					\small
-					On the European sessions we were throwing away \hl{more than half} the
-					signal before training even started.
-					\vspace{0.3em}
+					When the two participants move \emph{oppositely}, their average is flatter than
+					either one. On German sessions only $41\%$ of the variance survives.
+					\vspace{0.2em}
 
-					And CCC divides by the target variance - so this is not recoverable later.
+					CCC is normalised by target variance, so a flattened target cannot be
+					un-flattened later.
 				\end{alertblock}
 			\end{column}
 		\end{columns}
-		\vspace{0.4em}
+		\vspace{0.3em}
 		\centering\small
 		Japanese is the exception; the paper links it to a stronger tendency toward
 		interpersonal harmony.
@@ -616,6 +630,31 @@
 		\vspace{0.4em}
 		\centering\small
 		Bonus defect: nothing in it ever asked the model to be fair.
+	\end{frame}
+
+	\begin{frame}{Problem 4 - Where This Is Going}
+		\begin{block}{One loss became four terms. In plain words:}
+			\small
+			\begin{tabular}{lll}
+				\textbf{Term} & \textbf{Asks the model to} & \textbf{Fixes} \\
+				\hline
+				$1 - \widehat{\text{CCC}}$ & put frames in the \emph{right order} & bug 4a \\
+				Beta NLL, reweighted & get each frame's \emph{distribution} right & bug 4b \\
+				Per-modality NLL $/\,M$ & keep every stream useful on its own & bug 4c \\
+				Squared CDD & treat groups equally at equal truth & bug 4d \\
+			\end{tabular}
+		\end{block}
+		\vspace{0.3em}
+		\begin{block}{The intuition}
+			\small
+			\begin{enumerate}
+			    \item The first term aks: is this frame's answer sensible? 
+			    \item The second term asks: does the whole story rise and fall in the right places?
+			    \item The third stops the eight helper branches from going lazy and free-riding on the fused head. 
+			    \item The fourth says: whatever you predict, predict it the same way for everyone.
+			\end{enumerate}
+		\end{block}
+		\vspace{0.2em}
 	\end{frame}
 
 	\begin{frame}{Bug 4a - Calibrated Is Not The Same As Correlated}
@@ -770,7 +809,7 @@
 			\begin{tabular}{lrr}
 				& \textbf{Before} & \textbf{After} \\
 				\hline
-				Memory span $\tau_{\text{eff}}$ & 1.4 frames (58 ms) & 10--1000 frames (0.4--40 s) \\
+				Memory span $\tau_{\text{eff}}$ & 1.4 frames (58 ms) & 0.6--1000 frames (up to 40 s) \\
 				Distinct decay rates & 1 & 16 \\
 				Cross-modal distance & $C' = 128$ steps & 1 step \\
 				Fusion block parameters & 5{,}360{,}000 (74\%) & 96{,}640 (5.0\%) \\
@@ -779,77 +818,90 @@
 				Loss terms & 2 & 4 \\
 				Permutation actually used & no & yes \\
 				\hline
-				\textbf{Best validation CCC} & \textbf{0.0227} & \textbf{0.4228} \\
+				Best val CCC, NoXi+J & 0.0227 & 0.4228 \\
+				\textbf{Best val CCC, NoXi} & \textbf{--} & \textbf{0.7942} \\
+			\end{tabular}
+		\end{center}
+		\vspace{0.4em}
+		\centering\small
+		The NoXi column is new: we had never trained on it at all.
+	\end{frame}
+
+	\begin{frame}{\textsc{Part 3:} Three Runs, In Order}
+		\begin{center}
+			\small
+			\begin{tabular}{llrrl}
+				& \textbf{Corpus} & \textbf{Best CCC} & \textbf{Epoch} & \textbf{What we learned} \\
+				\hline
+				Run 1 & NoXi+J & 0.4228 & 15 of 25 & fixes work; wrong corpus \\
+				Run 2 & NoXi & 0.7500 & 7 of 12 & patience 5 stopped on noise \\
+				\textbf{Run 3} & \textbf{NoXi} & \textbf{0.7942} & \textbf{16 of 31} & patience 15, $\lambda_c = 1.0$ \\
 			\end{tabular}
 		\end{center}
 		\vspace{0.5em}
-		\centering\small
-		An $18.6\times$ improvement. Same data, same optimiser, same window length.
-	\end{frame}
-
-	\begin{frame}{\textsc{Part 3:} The Retrained Run}
 		\begin{columns}[onlytextwidth]
-			\begin{column}{0.46\textwidth}
-				\begin{block}{Run summary}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Run 3, best epoch}
 					\small
 					\begin{tabular}{lr}
-						Wall time & 36 min 38 s \\
-						XLA compile & 6 min 35 s \\
-						Per epoch & $\sim$73 s \\
-						Epochs run & 25 of 50 \\
-						Early stop & patience 10 \\
-						Best epoch & \hl{15} \\
+						val CCC & 0.7942 \\
+						$\rho$ & 0.7951 \\
+						expert CCC & $+0.700$ \\
+						novice CCC & $+0.615$ \\
+						$\text{CDD}_G$ & $-0.0146$ \\
 					\end{tabular}
 				\end{block}
 			\end{column}
-			\begin{column}{0.50\textwidth}
-				\begin{block}{Best epoch (15)}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Why run 3 beat run 2}
 					\small
-					\begin{tabular}{lr}
-						val CCC & \hl{0.4228} \\
-						$\text{CDD}_G$ & $+0.0053$ \\
-						$\text{CDD}_L$ (Chinese) & $-0.027$ \\
-						$\text{CDD}_L$ (Japanese) & $+0.009$ \\
-					\end{tabular}
-					\vspace{0.3em}
+					Raising $\lambda_c$ from $0.5$ to $1.0$ pushed $C_b$ from $0.92$ to $0.9989$.
+					\vspace{0.2em}
 
-					\footnotesize Our own success criterion was $\text{CDD} \le 0.05$.
+					Patience 15 let $\tau$ anneal further - it needs $\sim$45 epochs to reach
+					$\tau_{\min}$, and run 2 died at 12.
 				\end{block}
 			\end{column}
 		\end{columns}
-		\vspace{0.4em}
-		\centering\small
-		Fairness is comfortably inside target. Accuracy is the part still moving.
 	\end{frame}
 
-	\begin{frame}{The Run Was Unstable - And Trained On The Wrong Corpus}
+	\begin{frame}{The Number That Actually Counts Is Lower}
 		\begin{columns}[onlytextwidth]
-			\begin{column}{0.50\textwidth}
-				\begin{alertblock}{Validation CCC bounced hard}
-					\footnotesize
-					$0.10 \to 0.25 \to 0.19 \to 0.09 \to 0.24 \to 0.24 \to 0.37 \to 0.38$
-					$\to 0.25 \to 0.21 \to 0.08 \to 0.08 \to 0.34 \to 0.33 \to \mathbf{0.42} \to 0.29 \dots$
-					\vspace{0.3em}
-
-					\small Meanwhile training loss fell \emph{monotonically},
-					$0.058 \to -0.503$. Smooth loss, thrashing metric.
-				\end{alertblock}
-			\end{column}
 			\begin{column}{0.46\textwidth}
-				\begin{alertblock}{And the corpus problem}
+				\begin{block}{Two ways to score the same model}
 					\small
-					The log shows only \texttt{NoXi+J/train} and \texttt{NoXi+J/val}.
-					Languages: Japanese and Chinese only.
+					\begin{tabular}{lr}
+						Training loop & 0.7942 \\
+						\texttt{evaluate.py} & \hl{0.6987} \\
+					\end{tabular}
 					\vspace{0.3em}
 
-					\hl{NoXi was never loaded.} The model has never seen a European session.
+					\footnotesize NoXi val, 10 sessions, 577{,}176 frames.
+				\end{block}
+			\end{column}
+			\begin{column}{0.50\textwidth}
+				\begin{alertblock}{Trust the lower one}
+					\small
+					The training loop pools \emph{windows}: with 50\% overlap every interior frame
+					is counted twice, and zero-padded tails count as real.
+					\vspace{0.2em}
+
+					\texttt{evaluate.py} reassembles full sessions by overlap-add, exactly as the
+					challenge does. Averaging overlaps shrinks variance, which costs $C_b$.
 				\end{alertblock}
 			\end{column}
 		\end{columns}
 		\vspace{0.4em}
-		\centering\small
-		So $0.4228$ is an \emph{in-domain} number on Asian data. Cross-cultural transfer -
-		the entire point of the TTA design - remains untested.
+		\begin{center}
+			\begin{tikzpicture}
+				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
+				minimum width=11cm, minimum height=0.9cm, align=center,
+				font=\small\bfseries, text=coolpurple] {
+					\textbf{0.6987} on NoXi val, against a 2026 baseline of \textbf{0.55} on NoXi test.\\
+					Fairness under proper evaluation: $\text{CDD}_G = +0.006$, $\text{CDD}_L$ within $\pm0.027$.
+				};
+			\end{tikzpicture}
+		\end{center}
 	\end{frame}
 
 	\begin{frame}{Status - Honest Version}
@@ -860,35 +912,28 @@
 					\begin{itemize}
 						\item All six fixes in code
 						\item Paper rewritten to match
-						\item Retrained end to end
-						\item CCC $0.0227 \to 0.4228$
-						\item CDD inside target on both axes
+						\item Trained on both corpora
+						\item NoXi val CCC $= 0.6987$ (aggregated)
+						\item CDD inside target on both axes, both corpora
+						\item Inference $\to$ evaluation loop verified
 					\end{itemize}
 				\end{block}
 			\end{column}
 			\begin{column}{0.48\textwidth}
-				\begin{alertblock}{Caveats on that number}
+				\begin{alertblock}{Caveats}
 					\small
 					\begin{itemize}
-						\item NoXi+J only - no European data
-						\item Val split is 10 sessions; noisy
-						\item Not comparable to the $0.400$ baseline, which is a mean over four \emph{test} sets
-						\item Overfits after epoch 15
+						\item $0.7942$ is the max over 31 noisy epochs - selection bias
+						\item Checkpoint was chosen on the \emph{optimistic} metric
+						\item Val is 10 sessions; test-base is 16 unseen ones
+						\item MPII-GI and PInSoRo score zero by default
 					\end{itemize}
 				\end{alertblock}
 			\end{column}
 		\end{columns}
-		\vspace{0.5em}
-		\begin{center}
-			\begin{tikzpicture}
-				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
-				minimum width=11cm, minimum height=0.9cm, align=center,
-				font=\small\bfseries, text=coolpurple] {
-					The fixes clearly worked. Whether the model is competitive\\
-					is a different question, and one we cannot answer yet.
-				};
-			\end{tikzpicture}
-		\end{center}
+		\vspace{0.4em}
+		\centering\small
+		Leaderboard context: best NoXi (base) test is $0.82$; the 2026 baseline is $0.55$.
 	\end{frame}
 
 	\begin{frame}{Still Open}
@@ -897,9 +942,10 @@
 				\begin{alertblock}{Blocking}
 					\small
 					\begin{itemize}
-						\item \hl{MPIIGroupInteraction} - we do not have it. It is 1 of the 4
-						test sets, so we cap at 3/4 of the score
-						\item TTA still never run end-to-end - and it is our headline contribution
+						\item \hl{MPIIGroupInteraction} - still no access
+						\item \hl{PInSoRo} - new in MultiMediate'26, worth $1/3$ of the combined
+						score, and it is \emph{classification} (Cohen's $\kappa$), not regression
+						\item TTA still never run end-to-end
 					\end{itemize}
 				\end{alertblock}
 			\end{column}
@@ -907,7 +953,7 @@
 				\begin{block}{Known gaps}
 					\small
 					\begin{itemize}
-						\item No per-role or $\rho$ logging - cannot tell if the two heads collapsed
+						\item Select checkpoints on aggregated, not windowed, CCC
 						\item MC dropout (paper describes it, code has none)
 						\item Hungarian hard permutation
 						\item Score matrix missing $1/\sqrt{d_s}$
@@ -915,14 +961,13 @@
 				\end{block}
 			\end{column}
 		\end{columns}
-		\vspace{0.5em}
+		\vspace{0.4em}
 		\begin{block}{Next, in order}
 			\small
-			1. Train on \textbf{NoXi} \quad
-			2. Log per-role CCC and $\rho$ \quad
-			3. Stabilise: $\eta = 2\times10^{-4}$, patience 5 \quad
-			4. \textbf{Run TTA NoXi $\to$ NoXi+J} \quad
-			5. Ablate the four loss terms
+			1. \textbf{Run TTA NoXi $\to$ NoXi+J} \quad
+			2. Ablate the four loss terms \quad
+			3. Re-select checkpoint on aggregated CCC \quad
+			4. Full 50 epochs, no early stop
 		\end{block}
 	\end{frame}
 
@@ -930,13 +975,12 @@
 		\begin{block}{Questions I cannot answer alone}
 			\small
 			\begin{itemize}
-				\item \textbf{MPIIGroupInteraction} - does anyone have a contact who can speed
-				this up? Without it we lose a quarter of the score by default.
-				\item \textbf{Training strategy} - one model on the union of corpora, or separate
-				models per corpus? The challenge requires us to declare which. Now that a run costs
-				about an hour we can simply test both, but I would like agreement on the criterion first.
-				\item \textbf{Val split size} - 10 sessions gives a CCC estimate that swings by
-				$0.3$ between epochs. Do we accept that noise, or move to cross-validation?
+				\item \textbf{PInSoRo} - is it in scope? It is a third of Combined Score 26 and a
+				different task type. If we skip it we should say so deliberately, in the paper.
+				\item \textbf{MPIIGroupInteraction} - does anyone have a contact? Without it we
+				lose another sixth of the score by default.
+				\item \textbf{Training strategy} - one model on the union, or one per corpus? A run
+				is 45 minutes now, so we can test both; I would like agreement on the criterion first.
 			\end{itemize}
 		\end{block}
 		\vspace{0.6em}
