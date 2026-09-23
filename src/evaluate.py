@@ -11,12 +11,41 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from metrics import ccc, combined_ccc, cdd_gender, cdd_language
+from metrics import cdd_gender, cdd_language
 from read_data import ROLES, log, read_scalar_annotation
 
 
+# --- Official MultiMediate'26 scoring, replicated from hcmlab/MultiMediate26 baseline/5_CreateResulttable.py ---
 def load_csv(path: Path) -> np.ndarray:
-    return np.loadtxt(path, delimiter=";", dtype=np.float32)
+    """Official reader: one value per line; empty and 'nan' / '-nan(ind)' lines are DROPPED
+    (not interpolated), unparsable lines become NaN and are masked out later."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = path.read_bytes().decode("latin-1", errors="ignore")
+    vals = []
+    for ln in (l.strip() for l in text.splitlines()):
+        if not ln or ln.lower() in ("nan", "-nan(ind)"):
+            continue
+        try:
+            vals.append(float(ln))
+        except ValueError:
+            vals.append(float("nan"))
+    return np.asarray(vals, dtype=np.float32)
+
+
+def official_ccc(x: np.ndarray, y: np.ndarray) -> float:
+    """Official CCC: population variance, no epsilon."""
+    vx, vy = np.var(x), np.var(y)
+    s_xy = np.mean((x - np.mean(x)) * (y - np.mean(y)))
+    denom = vx + vy + (np.mean(x) - np.mean(y)) ** 2
+    return float("nan") if denom == 0.0 else float((2 * s_xy) / denom)
+
+
+def find_pred(pred_session: Path, role: str) -> Path:
+    """Official name is {role}.engagement.pred.csv; fall back to our older .annotation.csv outputs."""
+    p = pred_session / f"{role}.engagement.pred.csv"
+    return p if p.exists() else pred_session / f"{role}.engagement.annotation.csv"
 
 
 def read_gender_raw(session_dir: Path, role: str) -> str:
@@ -80,7 +109,7 @@ def main():
 
             for role in ROLES:
                 gt_path = session_dir / f"{role}.engagement.annotation.csv"
-                pred_path = pred_session / f"{role}.engagement.annotation.csv"
+                pred_path = find_pred(pred_session, role)
 
                 if not gt_path.exists() or not pred_path.exists():
                     continue
@@ -89,11 +118,17 @@ def main():
                 pred = load_csv(pred_path)
 
                 min_len = min(len(gt), len(pred))
-                all_preds.append(pred[:min_len])
-                all_targets.append(gt[:min_len])
+                pred, gt = pred[:min_len], gt[:min_len]
+                mask = np.isfinite(pred) & np.isfinite(gt)
+                if not mask.any():
+                    continue
+                pred, gt = pred[mask], gt[mask]
+                n = len(pred)
+                all_preds.append(pred)
+                all_targets.append(gt)
                 # Gender is per participant, language per session - broadcast to per-frame
-                all_genders.append(np.full(min_len, read_gender_raw(session_dir, role), dtype=object))
-                all_languages.append(np.full(min_len, language, dtype=object))
+                all_genders.append(np.full(n, read_gender_raw(session_dir, role), dtype=object))
+                all_languages.append(np.full(n, language, dtype=object))
 
         if not all_preds:
             log.info(f"{corpus}/{args.split}: no valid sessions")
@@ -101,7 +136,7 @@ def main():
 
         corpus_preds = np.concatenate(all_preds)
         corpus_targets = np.concatenate(all_targets)
-        corpus_ccc = ccc(corpus_preds, corpus_targets)
+        corpus_ccc = official_ccc(corpus_preds, corpus_targets)
         per_domain_cccs[corpus] = corpus_ccc
         log.info(f"{corpus}/{args.split}: CCC = {corpus_ccc:.4f} ({len(session_dirs)} sessions, {len(corpus_preds)} frames)")
 
@@ -126,13 +161,15 @@ def main():
         else:
             log.warning(f"{corpus}/{args.split}: CDD_L skipped - only one language present ({np.unique(languages).tolist()})")
 
-    if per_domain_cccs:
-        c_ccc = combined_ccc(per_domain_cccs)
+    # Official combined = plain mean over the datasets present (finite values only)
+    finite = [v for v in per_domain_cccs.values() if np.isfinite(v)]
+    c_ccc = float(np.mean(finite)) if finite else None
+    if c_ccc is not None:
         log.info(f"Combined CCC: {c_ccc:.4f}")
 
     results = {
         "per_domain_ccc": per_domain_cccs,
-        "combined_ccc": c_ccc if per_domain_cccs else None,
+        "combined_ccc": c_ccc,
         "per_domain_cdd_gender": per_domain_cdd_g,
         "per_domain_cdd_language": per_domain_cdd_l,
     }

@@ -129,7 +129,7 @@ def main():
             out_dir.mkdir(parents=True, exist_ok=True)
 
             for role, pred_arr in preds.items():
-                out_path = out_dir / f"{role}.engagement.annotation.csv"
+                out_path = out_dir / f"{role}.engagement.pred.csv"
                 np.savetxt(out_path, pred_arr, fmt="%.6f", delimiter=";")
 
             log.info(f"  {session_dir.name}: {preds[ROLES[0]].shape[0]} frames written")
