@@ -5,7 +5,6 @@
 \usepackage{amssymb}
 \usepackage{graphicx}
 \usepackage{tikz}
-\newfontfamily\georgianfont{Noto Sans Georgian}
 \usetikzlibrary{shapes.geometric, arrows.meta, positioning}
 
 \definecolor{coolpurple}{HTML}{7f65a0}
@@ -37,10 +36,10 @@
 \newcommand{\R}{\mathbb{R}}
 
 \title{EngageNet}
-\subtitle{Progress Update - August 26, 2026}
-\author{Lado Turmanidze, Luka Javakhishvili, Mariami Gadelia, Keso Chikhladze}
+\subtitle{Progress Update - September 23, 2026}
+\author{Lado Turmanidze}
 \institute{\small{Supervisors: Dr. Philipp M\"{u}ller \& Beso Mikaberidze}}
-\date{August 26, 2026}
+\date{September 23, 2026}
 
 \begin{document}
 
@@ -79,7 +78,8 @@
 			\item \textbf{Problem 3} - we predicted the wrong thing
 			\item \textbf{Problem 4} - the loss function had three bugs
 			\item \textbf{Results} - what the retrained model actually does
-			\item \textbf{What is still open} - including one thing we got wrong
+			\item \textbf{Since August} - checking our own numbers, and a method that never ran
+			\item \textbf{What we fixed, and what is next}
 		\end{enumerate}
 	\end{frame}
 
@@ -298,7 +298,7 @@
 	\begin{frame}{What The Theorem Told Us}
 		\begin{columns}[onlytextwidth]
 			\begin{column}{0.48\textwidth}
-				\begin{alertblock}{Where we were (2 weeks ago)}
+				\begin{alertblock}{Where we were (5 weeks ago)}
 					\small
 					$$ \rho = 0.229, \qquad \text{CCC} = 0.21 $$
 					$$ \implies C_b = \frac{0.21}{0.229} \approx 0.92 $$
@@ -316,17 +316,6 @@
 				\end{block}
 			\end{column}
 		\end{columns}
-		\vspace{0.6em}
-		\begin{center}
-			\begin{tikzpicture}
-				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
-				minimum width=11cm, minimum height=0.9cm, align=center,
-				font=\small\bfseries, text=coolpurple] {
-					2 weeks ago the problem was ranking, not scale. Everything that follows\\
-					is about \emph{why the model could not rank} - and what we did about it.
-				};
-			\end{tikzpicture}
-		\end{center}
 	\end{frame}
 
 	% ============================== PROBLEM 1 ==============================
@@ -430,9 +419,6 @@
 
 			\hl{They were different from each other, and both were broken - in different ways.}
 		\end{alertblock}
-		\vspace{0.3em}
-		\centering\small
-		This is the embarrassing one. It is also the one with the biggest payoff.
 	\end{frame}
 
 	\begin{frame}{Problem 2a - What The Paper Described}
@@ -648,8 +634,8 @@
 		\begin{block}{The intuition}
 			\small
 			\begin{enumerate}
-			    \item The first term aks: is this frame's answer sensible? 
-			    \item The second term asks: does the whole story rise and fall in the right places?
+			    \item The first term asks: does the whole story rise and fall in the right places?
+			    \item The second term asks: is this frame's answer sensible? 
 			    \item The third stops the eight helper branches from going lazy and free-riding on the fused head. 
 			    \item The fourth says: whatever you predict, predict it the same way for everyone.
 			\end{enumerate}
@@ -709,25 +695,67 @@
 		\end{alertblock}
 	\end{frame}
 
-	\begin{frame}{Bug 4b - The Fix, And Why It Needs \texttt{stop\_grad}}
-		\begin{block}{Re-weight each frame}
+	\begin{frame}{Bug 4b - The Fix: One Weight Per Frame}
+		\begin{block}{Every frame gets its own weight}
 			\small
-			$$ w_t = \operatorname{stop\_grad}\bigl(\kappa_t^{-\beta_w}\bigr),
-			\qquad \Longrightarrow \qquad
-			\frac{\partial\mathcal{L}}{\partial\mu} \propto \kappa^{\,1-\beta_w} $$
-			$\beta_w = 0$ is the old behaviour, $\beta_w = 1$ removes confidence weighting
-			entirely. We use $\beta_w = 0.5$.
+			A window is 250 frames. For every frame $t$ the model outputs its own
+			$(\alpha_t, \beta_t)$, so every frame has its own confidence
+			$\kappa_t = \alpha_t + \beta_t$. The loss is a sum over frames; we multiply each
+			frame's term by a weight:
+			$$ \mathcal{L}^{w}_{\text{NLL}} = \frac{1}{T}\sum_{t=1}^{T} w_t \cdot \bigl(-\ln p(y_t \mid \alpha_t, \beta_t)\bigr),
+			\qquad w_t = \kappa_t^{-\beta_w} $$
+			Frame $t$ used to pull $\propto \kappa_t$. Now it pulls
+			$\propto \kappa_t \cdot \kappa_t^{-\beta_w} = \kappa_t^{\,1-\beta_w}$.
 		\end{block}
-		\begin{alertblock}{Why the weight must be detached}
-			\small
-			If gradients could flow through $w_t$, the model would spot a shortcut: make
-			$\kappa$ huge, make $w_t$ tiny, and the loss goes down \emph{without predicting
-			anything better}.
-			\vspace{0.3em}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{Before ($\beta_w = 0$)}
+					\small
+					A sure frame ($\kappa = 100$) and an unsure one ($\kappa = 4$) pull
+					$100 : 4$ - the sure one \textbf{25$\times$} harder.
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{After ($\beta_w = 0.5$)}
+					\small
+					They pull $\sqrt{100} : \sqrt{4} = 10 : 2$ - only \hl{5$\times$}.
+					$\beta_w = 1$ would make every frame equal; $0.5$ is the middle ground.
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.1em}
+		\centering\footnotesize
+		Adapted from $\beta$-NLL (Seitzer et al., ICLR 2022), which does the same for Gaussian outputs.
+	\end{frame}
 
-			\texttt{stop\_grad} means ``compute this number, then treat it as a constant''.
-			It rebalances the update without becoming another thing to game.
-		\end{alertblock}
+	\begin{frame}{Bug 4b - When Are The Weights Computed, And Why \texttt{stop\_grad}?}
+		\begin{block}{Every training step, in this order}
+			\small
+			\begin{enumerate}
+				\item Forward pass: the model predicts $(\alpha_t, \beta_t)$ for every frame, so we know every $\kappa_t$.
+				\item Compute $w_t = \kappa_t^{-0.5}$ and \textbf{freeze} it - from here on it is a plain number.
+				\item Backward pass: each $w_t$ is a constant multiplier on its frame's gradient.
+				\item Update the parameters. Next step $\kappa_t$ has changed, so $w_t$ is recomputed from scratch.
+			\end{enumerate}
+			The weights are never learned. They are re-read from the model's current confidence every step.
+		\end{block}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{Without \texttt{stop\_grad}}
+					\small
+					$w_t$ depends on the parameters too, so it becomes part of what is optimised.
+					The model can lower the loss by \emph{changing its confidence} to shrink the
+					weight, not by predicting better.
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{With it}
+					\small
+					The weights change \emph{how hard} each frame pulls, not \emph{where} the
+					pulling stops: the best $(\alpha, \beta)$ is the same as for the plain likelihood.
+				\end{block}
+			\end{column}
+		\end{columns}
 	\end{frame}
 
 	\begin{frame}{Bug 4c - The Helper Heads Were Running The Show}
@@ -759,24 +787,34 @@
 	\end{frame}
 
 	\begin{frame}{Bug 4d - We Measured Fairness But Never Asked For It}
-		\begin{block}{CDD is differentiable, so we can train against it}
+		\begin{block}{Do equally engaged women and men get the same prediction?}
 			\small
-			Split the batch into $n_b$ quantile bins of the ground truth. Inside each bin,
-			compare the two groups' average predictions:
-			$$ \mathcal{L}_{\text{fair}} =
-			\frac{\sum_{b=1}^{n_b} |\mathcal{B}_b|\bigl(\overline{\hat{\mu}}^{\,A}_b - \overline{\hat{\mu}}^{\,B}_b\bigr)^2}
-			{\sum_{b=1}^{n_b} |\mathcal{B}_b|} $$
-			Squaring removes the sign, so it is smallest exactly when both groups get the same
-			prediction at the same true engagement.
+			Plain group averages are the wrong test: if one group really is more engaged, a
+			perfect model \emph{should} predict higher for it. So compare like with like:
+			\small
+			\begin{enumerate}
+				\item Sort the batch's frames by \textbf{true} engagement, cut into $n_b$ equal-count bins.
+				\item In each bin, average women's and men's predictions separately; take the gap.
+				\item $\mathcal{L}_{\text{fair}} = \sum_b |\mathcal{B}_b|\,\text{gap}_b^2 \,\big/ \sum_b |\mathcal{B}_b|$
+				\; (squared, so signs cannot cancel)
+			\end{enumerate}
 		\end{block}
-		\begin{alertblock}{Honest caveat}
-			\small
-			This term is \textbf{zero} on a batch containing only one group. Gender is a
-			session-level property, so most of our batches are single-group.
-			\vspace{0.2em}
-
-			It may need window-level shuffling to do anything. Landing it last, and measuring first.
-		\end{alertblock}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Example (illustrative)}
+					\small
+					Truth $\approx 0.6$: women predicted $0.66$, men $0.60$. Gap $0.06$,
+					penalty $0.0036$; the gradient nudges women down, men up, in that bin.
+				\end{block}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{Honest caveat}
+					\small
+					\textbf{Zero} on a batch with only one gender. A mixed-gender pair puts both
+					groups in the same window.
+				\end{alertblock}
+			\end{column}
+		\end{columns}
 	\end{frame}
 
 	\begin{frame}{The New Loss, All Together}
@@ -904,89 +942,194 @@
 		\end{center}
 	\end{frame}
 
-	\begin{frame}{Status - Honest Version}
+	% ============================== PART 4: SINCE AUGUST ==============================
+
+	\begin{frame}{\textsc{Part 4:} Since August - Did We Keep The Right Checkpoint?}
 		\begin{columns}[onlytextwidth]
-			\begin{column}{0.48\textwidth}
-				\begin{block}{Done \checkmark}
+			\begin{column}{0.44\textwidth}
+				\begin{block}{Run 3, all saved checkpoints}
+					\small
+					\begin{tabular}{lr}
+						Epoch & NoXi val CCC \\
+						\hline
+						10 & 0.6732 \\
+						\textbf{16 (kept)} & \hl{0.6987} \\
+						20 & 0.6267 \\
+						30 & 0.6472 \\
+					\end{tabular}
+					\vspace{0.3em}
+
+					\footnotesize \texttt{evaluate.py}, overlap-add. Only every 10th epoch was saved.
+				\end{block}
+			\end{column}
+			\begin{column}{0.52\textwidth}
+				\begin{block}{What this answers}
 					\small
 					\begin{itemize}
-						\item All six fixes in code
-						\item Paper rewritten to match
-						\item Trained on both corpora
-						\item NoXi val CCC $= 0.6987$ (aggregated)
-						\item CDD inside target on both axes, both corpora
-						\item Inference $\to$ evaluation loop verified
+						\item The optimistic metric still picked the right one: of the four we
+						have, epoch 16 is best.
+						\item After epoch 16 the model gets \emph{worse}. ``Train longer so $\tau$
+						fully anneals'' moves down the list.
+						\item Checkpoints a few epochs apart differ by up to $0.07$. Any change
+						smaller than that needs repeated runs before we believe it.
+					\end{itemize}
+				\end{block}
+			\end{column}
+		\end{columns}
+	\end{frame}
+
+	\begin{frame}{A Model Trained On One Corpus Is Nearly Blind On The Other}
+		\begin{block}{Every model, scored on every corpus}
+			\small
+			\centering
+			\begin{tabular}{lrr}
+				& \textbf{Scored on NoXi} & \textbf{Scored on NoXi+J} \\
+				\hline
+				Trained on NoXi (Run 3) & \hl{0.6987} & 0.0922 \\
+				Trained on NoXi+J (Run 1) & 0.1429 & \hl{0.4337} \\
+			\end{tabular}
+
+			\footnotesize NoXi: English, French, German. NoXi+J: Japanese, Chinese. Same features,
+			same architecture, same task.
+		\end{block}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{The off-diagonal is near zero}
+					\small
+					What a model learns about engagement on one set of people and languages
+					barely transfers to the other.
+
+					This is exactly the gap test-time adaptation was designed to close.
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{Immediate consequence}
+					\small
+					Use one model per corpus. Mean over the two corpora goes
+					from $0.3955$ to \hl{0.5662}.
+					\vspace{0.2em}
+
+					No new training, just the right model on the right data.
+				\end{block}
+			\end{column}
+		\end{columns}
+		\vspace{0.1em}
+		\centering\footnotesize
+		Side note: on NoXi+J the honest score (0.4337) is \emph{higher} than the training
+		loop's (0.4228). The overlap-add gap is not a fixed discount.
+	\end{frame}
+
+	\begin{frame}{TTA - How It Is Supposed To Work}
+		\begin{block}{The idea}
+			\small
+			At test time there are no labels. But the model has a \hl{fused} head that sees all
+			8 streams, and 8 \hl{single-stream} heads that each see one. The fused head acts as a
+			\emph{teacher}: on unlabelled test windows, we nudge the model so the single-stream
+			heads agree with it.
+		\end{block}
+		\begin{block}{Only where teaching is safe and useful}
+			\small
+			Every head reports its uncertainty $u$ (the Beta variance from Part 0). Teach on
+			window $i$ only if
+			\begin{itemize}
+				\item the teacher is \textbf{sure}: its $u$ is among the \emph{lowest} 30\% in the batch, and
+				\item the students are \textbf{unsure}: their average $u$ is among the \emph{highest} 30\%.
+			\end{itemize}
+			Written out, with $q_p :=$ the value that a fraction $p$ of the batch falls below:
+			$$ \text{keep}_i = \bigl[\,u^{\text{multi}}_i < q_{0.3}(u^{\text{multi}})\,\bigr]
+			\;\wedge\; \bigl[\,u^{\text{uni}}_i > q_{0.7}(u^{\text{uni}})\,\bigr] $$
+		\end{block}
+	\end{frame}
+
+	\begin{frame}{TTA Was Written, Wired In - And Never Fired}
+		\begin{block}{With a batch of 10 windows}
+			\small
+			$q_{0.3}$ sits around the 3rd-lowest teacher uncertainty, so roughly the 3 surest windows
+			pass the first test; $q_{0.7}$ sits around the 7th, so roughly the 3 most confused pass
+			the second. Windows in both groups are kept.
+		\end{block}
+		\begin{alertblock}{Our inference feeds one window at a time}
+			\small
+			A batch of one. The 30\% point of a single number is that number,
+			$q_{0.3}(\{u\}) = u$, and $u < u$ is never true.
+			\hl{Every window is rejected, so the adaptation step is never called.}
+		\end{alertblock}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{alertblock}{Two more problems behind it}
+					\small
+					Even when triggered, it adapts on \emph{every} window in the batch, not only
+					the kept ones; and it outputs predictions from \emph{before} the update.
+				\end{alertblock}
+			\end{column}
+			\begin{column}{0.48\textwidth}
+				\begin{block}{What it means for our numbers}
+					\small
+					Every CCC in this talk is \textbf{without} TTA. The method in our paper's
+					title has, in effect, never run - and the previous slides say we need it.
+				\end{block}
+			\end{column}
+		\end{columns}
+	\end{frame}
+
+	\begin{frame}{What We Fixed}
+		\begin{columns}[onlytextwidth]
+			\begin{column}{0.48\textwidth}
+				\begin{block}{In the model}
+					\small
+					\begin{itemize}
+						\item Memory span: 58 ms $\to$ up to 40 s \hfill (P1)
+						\item Modalities now actually fuse, the ordering matters,
+						7.2M $\to$ 2.1M parameters \hfill (P2)
+						\item One prediction per person, as the challenge asks \hfill (P3)
+						\item Loss: ranking, hard frames, balance, fairness \hfill (P4)
 					\end{itemize}
 				\end{block}
 			\end{column}
 			\begin{column}{0.48\textwidth}
-				\begin{alertblock}{Caveats}
+				\begin{block}{In the pipeline}
 					\small
 					\begin{itemize}
-						\item $0.7942$ is the max over 31 noisy epochs - selection bias
-						\item Checkpoint was chosen on the \emph{optimistic} metric
-						\item Val is 10 sessions; test-base is 16 unseen ones
-						\item MPII-GI and PInSoRo score zero by default
+						\item Broken \texttt{NaN} entries in NoXi label files repaired
+						\item Scoring through the real challenge pipeline, not the training loop
+						\item Checkpoint choice re-checked on the real scores
+						\item Found why TTA never fired
 					\end{itemize}
-				\end{alertblock}
+				\end{block}
 			\end{column}
 		\end{columns}
+		\vspace{0.6em}
+		\begin{center}
+			\begin{tikzpicture}
+				\node[draw=coolpurple, fill=lightpurple, rounded corners=6pt,
+				minimum width=11cm, minimum height=0.9cm, align=center,
+				font=\small\bfseries, text=coolpurple] {
+					NoXi+J val CCC: \textbf{0.0227} $\to$ \textbf{0.4337}. \quad NoXi val CCC: \textbf{0.6987}.\\
+					Fairness gaps (CDD) within $\pm0.03$ on both corpora.
+				};
+			\end{tikzpicture}
+		\end{center}
+	\end{frame}
+
+	\begin{frame}{Next Steps}
+		\begin{block}{In order}
+			\small
+			\begin{enumerate}
+				\item \textbf{Make TTA work, then run NoXi $\to$ NoXi+J} - it is the method in the
+				title, and cross-corpus transfer ($0.09$) is exactly its job.
+				\item \textbf{Submit per-corpus test predictions} - both models' test outputs are
+				written, not yet checked.
+				\item \textbf{Retrain NoXi+J with Run 3 settings} - running now; it was trained with
+				older settings.
+				\item \textbf{One model on both corpora} - does more data beat two specialists?
+				\item \textbf{Repeat runs with different seeds} - checkpoints differ by up to $0.07$,
+				so we need to know how much of any gain is noise.
+				\item \textbf{Ablate the four loss terms} - which of them actually earns its place?
+			\end{enumerate}
+		\end{block}
 		\vspace{0.4em}
 		\centering\small
 		Leaderboard context: best NoXi (base) test is $0.82$; the 2026 baseline is $0.55$.
-	\end{frame}
-
-	\begin{frame}{Still Open}
-		\begin{columns}[onlytextwidth]
-			\begin{column}{0.48\textwidth}
-				\begin{alertblock}{Blocking}
-					\small
-					\begin{itemize}
-						\item \hl{MPIIGroupInteraction} - still no access
-						\item \hl{PInSoRo} - new in MultiMediate'26, worth $1/3$ of the combined
-						score, and it is \emph{classification} (Cohen's $\kappa$), not regression
-						\item TTA still never run end-to-end
-					\end{itemize}
-				\end{alertblock}
-			\end{column}
-			\begin{column}{0.48\textwidth}
-				\begin{block}{Known gaps}
-					\small
-					\begin{itemize}
-						\item Select checkpoints on aggregated, not windowed, CCC
-						\item MC dropout (paper describes it, code has none)
-						\item Hungarian hard permutation
-						\item Score matrix missing $1/\sqrt{d_s}$
-					\end{itemize}
-				\end{block}
-			\end{column}
-		\end{columns}
-		\vspace{0.4em}
-		\begin{block}{Next, in order}
-			\small
-			1. \textbf{Run TTA NoXi $\to$ NoXi+J} \quad
-			2. Ablate the four loss terms \quad
-			3. Re-select checkpoint on aggregated CCC \quad
-			4. Full 50 epochs, no early stop
-		\end{block}
-	\end{frame}
-
-	\begin{frame}{What I Would Like From You}
-		\begin{block}{Questions I cannot answer alone}
-			\small
-			\begin{itemize}
-				\item \textbf{PInSoRo} - is it in scope? It is a third of Combined Score 26 and a
-				different task type. If we skip it we should say so deliberately, in the paper.
-				\item \textbf{MPIIGroupInteraction} - does anyone have a contact? Without it we
-				lose another sixth of the score by default.
-				\item \textbf{Training strategy} - one model on the union, or one per corpus? A run
-				is 45 minutes now, so we can test both; I would like agreement on the criterion first.
-			\end{itemize}
-		\end{block}
-		\vspace{0.6em}
-		\begin{center}
-			\Large\bfseries\color{coolpurple} Questions?
-		\end{center}
 	\end{frame}
 
 \end{document}
