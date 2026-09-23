@@ -18,7 +18,7 @@ from dataset import EngageNetDataset
 from model import EngageNet
 from read_data import ROLES, load_session, log
 from train import TrainState, create_train_state
-from tta import sample_filter, tta_step
+from tta import count_adapted, make_tta_tx, select_windows, tta_step, window_uncertainty
 
 
 # Default targets the challenge submission (test has no labels, so evaluate.py
@@ -40,41 +40,62 @@ def find_latest_checkpoint(checkpoint_dir: Path) -> Path:
     return ckpts[-1]
 
 
-def run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, rng: jax.Array) -> dict[str, np.ndarray]:  # {role: (T,) predictions}
+# Fewer windows than this and batch quantiles are meaningless, so the last short batch is never adapted on
+TTA_MIN_BATCH = 4
+
+
+@jax.jit
+def predict_batch(state: TrainState, stream_inputs: dict[str, jax.Array], tau: float):
+    variables = {"params": state.params, "batch_stats": state.batch_stats}
+    (multimodal, unimodal), _ = state.apply_fn(variables, stream_inputs, tau=tau, rng=None, train=False, mutable=["batch_stats"])
+    return multimodal, unimodal
+
+
+def _stack(windows: list[dict]) -> dict[str, jax.Array]:
+    # Stream tensors only: engagement / gender / session are not model inputs
+    keys = [k for k, v in windows[0].items() if isinstance(v, np.ndarray) and not k.endswith(".engagement") and not k.endswith(".gender")]
+    return {k: jnp.asarray(np.stack([w[k] for w in windows], axis=0)) for k in keys}
+
+
+# tta_state: None -> plain inference with `state`; otherwise a fresh TTA state (reset per session by the caller)
+def run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, tta_state: TrainState | None = None) -> tuple[dict[str, np.ndarray], dict[str, int]]:
     ds = EngageNetDataset(cnfg, split=None, session_dirs=[session_dir])
 
     window_preds: dict[str, list[np.ndarray]] = {role: [] for role in ROLES}
     window_starts: list[int] = []
+    stats = {"windows": 0, "selected": 0, "steps": 0}
+    st = tta_state
 
-    idx = 0
-    for window in ds.iter_windows():
-        start = idx * cnfg.window_stride
-        window_starts.append(start)
+    def flush(buf: list[dict]) -> None:
+        nonlocal st
+        inputs = _stack(buf)
 
-        stream_inputs = {}
-        for key, val in window.items():
-            if isinstance(val, np.ndarray) and not key.endswith(".engagement") and not key.endswith(".gender"):
-                stream_inputs[key] = jnp.array(val[np.newaxis])
+        if st is not None and len(buf) >= TTA_MIN_BATCH:
+            multimodal, unimodal = predict_batch(st, inputs, cnfg.tau_min)
+            mask = select_windows(window_uncertainty(multimodal), window_uncertainty(unimodal))
+            n_sel = int(mask.sum())
+            if n_sel > 0:
+                st, _loss = tta_step(st, inputs, mask, cnfg.tau_min, lam=cnfg.tta_lambda)
+                stats["selected"] += n_sel
+                stats["steps"] += 1
 
-        variables = {"params": state.params, "batch_stats": state.batch_stats}
-        (multimodal, unimodal), _ = state.apply_fn(variables, stream_inputs, tau=cnfg.tau_min, rng=None, train=False, mutable=["batch_stats"])
-
-        # TTA filter needs one scalar uncertainty per sample: pool over time, then over roles
-        alpha_pooled = jnp.stack([a for a, _ in multimodal.values()], axis=0).mean(axis=(0, -1))
-        beta_pooled = jnp.stack([b for _, b in multimodal.values()], axis=0).mean(axis=(0, -1))
-        unimodal_pooled = {k: (a.mean(axis=-1), b.mean(axis=-1)) for k, (a, b) in unimodal.items()}
-        mask = sample_filter(alpha_pooled, beta_pooled, unimodal_pooled)
-
-        if mask.any():
-            rng, rng_tta = jax.random.split(rng)
-            state, _loss, multimodal, unimodal = tta_step(state, stream_inputs, tau=cnfg.tau_min, rng=rng_tta)
-
+        # Predictions always come from AFTER the update, in eval mode
+        multimodal, _ = predict_batch(st if st is not None else state, inputs, cnfg.tau_min)
         for role in ROLES:
             a, b = multimodal[role]
-            window_preds[role].append(np.array(predictive_mean(a, b)[0]))  # (L',)
+            means = np.asarray(predictive_mean(a, b))  # (B, L')
+            window_preds[role].extend(list(means))
+        stats["windows"] += len(buf)
 
-        idx += 1    
-    
+    buf: list[dict] = []
+    for idx, window in enumerate(ds.iter_windows()):
+        window_starts.append(idx * cnfg.window_stride)
+        buf.append(window)
+        if len(buf) == cnfg.infer_batch:
+            flush(buf)
+            buf = []
+    if buf:
+        flush(buf)
 
     # Determine total session length from engagement annotations or stream length
     session = load_session(session_dir)
@@ -88,7 +109,7 @@ def run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, rng
     for role in ROLES:
         result[role] = aggregate_windows(window_preds[role], window_starts, total_frames)
 
-    return result
+    return result, stats
 
 
 def main():
@@ -104,6 +125,16 @@ def main():
     checkpointer = ocp.StandardCheckpointer()
     restored = checkpointer.restore(ckpt_path, {"params": state.params, "batch_stats": state.batch_stats})
     state = state.replace(params=restored["params"], batch_stats=restored["batch_stats"])
+
+    tta_template = None
+    if cnfg.tta:
+        n_adapt = count_adapted(state.params)
+        if n_adapt == 0:
+            raise RuntimeError("TTA: surgical_mask matched no parameters - check layer names in tta.surgical_mask")
+        tta_template = TrainState.create(apply_fn=state.apply_fn, params=state.params, tx=make_tta_tx(state.params, cnfg.tta_lr), batch_stats=state.batch_stats)
+        log.info(f"TTA on: adapting {n_adapt:,} params, lr={cnfg.tta_lr}, lambda={cnfg.tta_lambda}, batch={cnfg.infer_batch}, reset per session")
+    else:
+        log.info(f"TTA off, batch={cnfg.infer_batch}")
 
     cnfg.submission_dir.mkdir(parents=True, exist_ok=True)
 
@@ -122,8 +153,8 @@ def main():
         log.info(f"{corpus_name}/{split}: {len(session_dirs)} sessions")
 
         for session_dir in session_dirs:
-            rng, rng_session = jax.random.split(rng)
-            preds = run_session(session_dir, state, sub_cnfg, rng_session)
+            # tta_template is immutable, so passing it again resets params and optimizer state for every session
+            preds, stats = run_session(session_dir, state, sub_cnfg, tta_template)
 
             out_dir = cnfg.submission_dir / corpus_name / split / session_dir.name
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -132,7 +163,8 @@ def main():
                 out_path = out_dir / f"{role}.engagement.pred.csv"
                 np.savetxt(out_path, pred_arr, fmt="%.6f", delimiter=";")
 
-            log.info(f"  {session_dir.name}: {preds[ROLES[0]].shape[0]} frames written")
+            tta_info = f", TTA: {stats['selected']}/{stats['windows']} windows selected, {stats['steps']} steps" if cnfg.tta else ""
+            log.info(f"  {session_dir.name}: {preds[ROLES[0]].shape[0]} frames written{tta_info}")
 
     log.info("Inference complete")
 

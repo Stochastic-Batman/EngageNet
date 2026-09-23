@@ -78,6 +78,12 @@ class EngageNetConfig:
     # Use "val" to produce predictions that evaluate.py can actually score.
     submission_split: Optional[str] = None
 
+    # Inference / test-time adaptation (inference.py only)
+    infer_batch: int = 16          # windows per inference batch; TTA quantiles are taken over this batch
+    tta: bool = False              # off by default so plain inference stays reproducible
+    tta_lr: float = 1e-4           # Adam lr for the surgical layers
+    tta_lambda: float = 1.0        # weight of the pseudo-label NLL term in the TTA loss
+
     # SSM / BiMamba
     ssm_state_dim: int = 16        # N - state dimension in selective SSM
     conv_kernel: int = 4           # D_C -  depthwise conv kernel in BiMamba
@@ -150,6 +156,10 @@ class EngageNetConfig:
         parser.add_argument("--patience", type=int, default=10)
         parser.add_argument("--submission-dir", type=str, default=None)
         parser.add_argument("--submission-split", type=str, default=None)
+        parser.add_argument("--infer-batch", type=int, default=16)
+        parser.add_argument("--tta", action="store_true")
+        parser.add_argument("--tta-lr", type=float, default=1e-4)
+        parser.add_argument("--tta-lambda", type=float, default=1.0)
         parser.add_argument("--ssm-state-dim", type=int, default=16)
         parser.add_argument("--conv-kernel", type=int, default=4)
         parser.add_argument("--gs-dim", type=int, default=64)
@@ -187,6 +197,10 @@ class EngageNetConfig:
             patience=args.patience,
             submission_dir=Path(args.submission_dir) if args.submission_dir else cls.submission_dir,
             submission_split=args.submission_split,
+            infer_batch=args.infer_batch,
+            tta=args.tta,
+            tta_lr=args.tta_lr,
+            tta_lambda=args.tta_lambda,
             ssm_state_dim=args.ssm_state_dim,
             conv_kernel=args.conv_kernel,
             gs_dim=args.gs_dim,
