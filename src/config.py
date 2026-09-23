@@ -83,6 +83,8 @@ class EngageNetConfig:
     tta: bool = False              # off by default so plain inference stays reproducible
     tta_lr: float = 1e-4           # Adam lr for the surgical layers
     tta_lambda: float = 1.0        # weight of the pseudo-label NLL term in the TTA loss
+    tta_multi_pct: float = 0.3     # keep windows whose fused-head uncertainty is below this batch quantile
+    tta_uni_pct: float = 0.7       # ...and whose single-stream uncertainty is above this batch quantile
 
     # SSM / BiMamba
     ssm_state_dim: int = 16        # N - state dimension in selective SSM
@@ -160,6 +162,8 @@ class EngageNetConfig:
         parser.add_argument("--tta", action="store_true")
         parser.add_argument("--tta-lr", type=float, default=1e-4)
         parser.add_argument("--tta-lambda", type=float, default=1.0)
+        parser.add_argument("--tta-multi-pct", type=float, default=0.3)
+        parser.add_argument("--tta-uni-pct", type=float, default=0.7)
         parser.add_argument("--ssm-state-dim", type=int, default=16)
         parser.add_argument("--conv-kernel", type=int, default=4)
         parser.add_argument("--gs-dim", type=int, default=64)
@@ -201,6 +205,8 @@ class EngageNetConfig:
             tta=args.tta,
             tta_lr=args.tta_lr,
             tta_lambda=args.tta_lambda,
+            tta_multi_pct=args.tta_multi_pct,
+            tta_uni_pct=args.tta_uni_pct,
             ssm_state_dim=args.ssm_state_dim,
             conv_kernel=args.conv_kernel,
             gs_dim=args.gs_dim,

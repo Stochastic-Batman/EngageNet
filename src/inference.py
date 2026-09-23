@@ -72,7 +72,7 @@ def run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, tta
 
         if st is not None and len(buf) >= TTA_MIN_BATCH:
             multimodal, unimodal = predict_batch(st, inputs, cnfg.tau_min)
-            mask = select_windows(window_uncertainty(multimodal), window_uncertainty(unimodal))
+            mask = select_windows(window_uncertainty(multimodal), window_uncertainty(unimodal), multi_pct=cnfg.tta_multi_pct, uni_pct=cnfg.tta_uni_pct)
             n_sel = int(mask.sum())
             if n_sel > 0:
                 st, _loss = tta_step(st, inputs, mask, cnfg.tau_min, lam=cnfg.tta_lambda)
@@ -132,7 +132,7 @@ def main():
         if n_adapt == 0:
             raise RuntimeError("TTA: surgical_mask matched no parameters - check layer names in tta.surgical_mask")
         tta_template = TrainState.create(apply_fn=state.apply_fn, params=state.params, tx=make_tta_tx(state.params, cnfg.tta_lr), batch_stats=state.batch_stats)
-        log.info(f"TTA on: adapting {n_adapt:,} params, lr={cnfg.tta_lr}, lambda={cnfg.tta_lambda}, batch={cnfg.infer_batch}, reset per session")
+        log.info(f"TTA on: adapting {n_adapt:,} params, lr={cnfg.tta_lr}, lambda={cnfg.tta_lambda}, batch={cnfg.infer_batch}, pct=({cnfg.tta_multi_pct}, {cnfg.tta_uni_pct}), reset per session")
     else:
         log.info(f"TTA off, batch={cnfg.infer_batch}")
 
