@@ -49,6 +49,9 @@ class EngageNetConfig:
 
     normalize_inputs: bool = True
 
+    # Training batches: False = consecutive windows of one session (original); True = windows shuffled across all sessions
+    shuffle_windows: bool = False
+
     # Shared projection dim for inter-modal fusion
     shared_dim: int = 128          # C'
 
@@ -144,6 +147,7 @@ class EngageNetConfig:
         parser.add_argument("--window-stride", type=int, default=125)
         parser.add_argument("--active-modalities", nargs="*", default=None)
         parser.add_argument("--no-normalize-inputs", dest="normalize_inputs", action="store_false")
+        parser.add_argument("--shuffle-windows", action="store_true")
         parser.add_argument("--shared-dim", type=int, default=128)
         parser.add_argument("--batch-size", type=int, default=8)
         parser.add_argument("--seed", type=int, default=95)
@@ -187,6 +191,7 @@ class EngageNetConfig:
             window_stride=args.window_stride,
             active_modalities=args.active_modalities,
             normalize_inputs=args.normalize_inputs,
+            shuffle_windows=args.shuffle_windows,
             shared_dim=args.shared_dim,
             batch_size=args.batch_size,
             seed=args.seed,

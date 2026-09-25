@@ -106,7 +106,12 @@ class EngageNetDataset:
             yield from self._windows_from_session(self.session_dirs[idx])
 
 
-    def _windows_from_session(self, session_dir: Path) -> Iterator[dict[str, np.ndarray]]:
+    def _prepare_session(self, session_dir: Path) -> Optional[dict]:
+        """Load, resample and standardise one session's active streams; None if it has to be skipped.
+
+        Returns {"resampled": {"{role}.{feat}": (T, D)}, "engagement": {role: (T,) or None},
+        "genders": {role: int8}, "common_T": int}.
+        """
         cnfg = self.cnfg
         session = load_session(session_dir, features=cnfg.modality_names)
 
@@ -126,7 +131,7 @@ class EngageNetDataset:
 
         if not resampled:
             log.warning(f"Session {session_dir.name}: no streams found, skipping")
-            return
+            return None
 
         # 2. Find the common temporal length across all resampled streams
         common_T = min(v.shape[0] for v in resampled.values())
@@ -143,7 +148,7 @@ class EngageNetDataset:
                 if n_bad:
                     if n_bad == arr.size:
                         log.warning(f"Session {session_dir.name}: {role}.engagement is entirely NaN, skipping session")
-                        return
+                        return None
                     log.warning(f"Session {session_dir.name}: {role}.engagement has {n_bad}/{arr.size} NaN frames, interpolating")
                     s = pd.Series(arr).interpolate(method="linear", limit_direction="both")
                     arr = s.to_numpy(dtype=np.float32)
@@ -157,21 +162,58 @@ class EngageNetDataset:
         # 3b. Per-participant group label - constant across the session, so read once
         genders = {role: np.int8(_gender_code(session_dir, role)) for role in ROLES}
 
-        # 4. Slice into windows
-        W = cnfg.window_len
-        S = cnfg.window_stride
-        n_windows = max(1, 1 + (common_T - W) // S)
+        return {"resampled": resampled, "engagement": engagement, "genders": genders, "common_T": common_T}
 
-        for w in range(n_windows):
-            start = w * S
-            end = start + W
-            sample: dict[str, np.ndarray] = {"session": session_dir.name}  # type: ignore[dict-item]
-            for key, arr in resampled.items():
-                chunk = _pad_or_trim(arr[start:end], W)
-                # Transpose to channels-first: (L, C_i) -> (C_i, L)
-                sample[key] = chunk.T.astype(np.float32)
-            for role in ROLES:
-                if engagement[role] is not None:
-                    sample[f"{role}.engagement"] = engagement[role][start:end]
-                sample[f"{role}.gender"] = genders[role]
-            yield sample
+
+    def _n_windows(self, common_T: int) -> int:
+        return max(1, 1 + (common_T - self.cnfg.window_len) // self.cnfg.window_stride)
+
+
+    def _slice_window(self, prep: dict, session_name: str, start: int) -> dict[str, np.ndarray]:
+        W = self.cnfg.window_len
+        end = start + W
+        sample: dict[str, np.ndarray] = {"session": session_name}  # type: ignore[dict-item]
+        for key, arr in prep["resampled"].items():
+            chunk = _pad_or_trim(arr[start:end], W)
+            # Transpose to channels-first: (L, C_i) -> (C_i, L)
+            sample[key] = chunk.T.astype(np.float32)
+        for role in ROLES:
+            if prep["engagement"][role] is not None:
+                sample[f"{role}.engagement"] = prep["engagement"][role][start:end]
+            sample[f"{role}.gender"] = prep["genders"][role]
+        return sample
+
+
+    def _windows_from_session(self, session_dir: Path) -> Iterator[dict[str, np.ndarray]]:
+        prep = self._prepare_session(session_dir)
+        if prep is None:
+            return
+
+        # 4. Slice into windows
+        for w in range(self._n_windows(prep["common_T"])):
+            yield self._slice_window(prep, session_dir.name, w * self.cnfg.window_stride)
+
+
+    def iter_windows_global(self, seed: int = 0) -> Iterator[dict[str, np.ndarray]]:
+        """Yield every window of every session in one globally shuffled order.
+
+        All sessions are prepared once and kept in memory (the active streams only), so consecutive
+        windows - and therefore the windows of one batch - come from different sessions. The cache
+        lives on this object; data_loader keeps the object alive across epochs.
+        """
+        if getattr(self, "_cache", None) is None:
+            cache = []
+            for d in self.session_dirs:
+                prep = self._prepare_session(d)
+                if prep is not None:
+                    cache.append((d.name, prep))
+            self._cache = cache
+            self._index = [(i, w * self.cnfg.window_stride) for i, (_n, prep) in enumerate(cache) for w in range(self._n_windows(prep["common_T"]))]
+            mb = sum(a.nbytes for _n, prep in cache for a in prep["resampled"].values()) / 2**20
+            log.info(f"Global window shuffle: {len(self._index)} windows from {len(cache)} sessions cached in memory ({mb:.0f} MiB)")
+
+        order = np.random.default_rng(seed).permutation(len(self._index))
+        for k in order:
+            i, start = self._index[k]
+            name, prep = self._cache[i]
+            yield self._slice_window(prep, name, start)

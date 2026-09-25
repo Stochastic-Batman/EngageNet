@@ -33,6 +33,10 @@ def _collate(windows: list[dict[str, np.ndarray]]) -> dict[str, jnp.ndarray]:
     return batch
 
 
+# One in-memory dataset per (corpus, split, window settings, modalities), reused across epochs by the global shuffle
+_GLOBAL_CACHE: dict[tuple, EngageNetDataset] = {}
+
+
 def iter_batches(cnfg: EngageNetConfig, split: str, *, shuffle: bool = False, seed: int | None = None) -> Iterator[dict[str, jnp.ndarray]]:
     """Yield batches of size `cnfg.batch_size` from the given `split`.
 
@@ -41,11 +45,20 @@ def iter_batches(cnfg: EngageNetConfig, split: str, *, shuffle: bool = False, se
     shuffle : whether to shuffle session order each epoch
     seed : RNG seed (used only when `shuffle` is True)
     """
-    ds = EngageNetDataset(cnfg, split)
-    rng_key = jax.random.PRNGKey(seed if seed is not None else 0) if shuffle else None
+    if shuffle and cnfg.shuffle_windows:
+        # Windows shuffled across ALL sessions: every batch mixes sessions (and usually genders)
+        key = (cnfg.corpus, split, cnfg.window_len, cnfg.window_stride, cnfg.target_sr, tuple(cnfg.modality_names))
+        if key not in _GLOBAL_CACHE:
+            _GLOBAL_CACHE[key] = EngageNetDataset(cnfg, split)
+        windows = _GLOBAL_CACHE[key].iter_windows_global(seed=seed if seed is not None else 0)
+    else:
+        # Original behaviour: sessions in (optionally shuffled) order, windows of a session consecutive
+        ds = EngageNetDataset(cnfg, split)
+        rng_key = jax.random.PRNGKey(seed if seed is not None else 0) if shuffle else None
+        windows = ds.iter_windows(shuffle_sessions=shuffle, rng_key=rng_key)
 
     buf: list[dict[str, np.ndarray]] = []
-    for window in ds.iter_windows(shuffle_sessions=shuffle, rng_key=rng_key):
+    for window in windows:
         buf.append(window)
         if len(buf) == cnfg.batch_size:
             yield _collate(buf)
@@ -53,4 +66,3 @@ def iter_batches(cnfg: EngageNetConfig, split: str, *, shuffle: bool = False, se
     # yield the last (possibly smaller) batch
     if buf:
         yield _collate(buf)
-
