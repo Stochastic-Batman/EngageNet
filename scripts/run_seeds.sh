@@ -15,6 +15,10 @@ if [ $# -lt 3 ]; then echo "usage: $0 <NoXi|NoXi+J> <gpu> <tag> [extra flags]"; 
 corpus=$1; gpu=$2; tag=$3; shift 3
 
 cd "$(dirname "$0")/.." || exit 1
+
+# One driver per tag: a second launch with the same tag exits instead of training the same seeds in parallel
+exec 9>"logs/$tag.lock"
+if ! flock -n 9; then echo "$(date +%T) $tag is already running - not starting a second copy"; exit 1; fi
 source EngageNet_venv/bin/activate
 export XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=$gpu
 
