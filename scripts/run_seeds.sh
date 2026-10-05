@@ -23,8 +23,9 @@ source EngageNet_venv/bin/activate
 export XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=$gpu
 # Cap each process (default would let one process grow to 75% of the card) so two runs fit on one GPU,
 # and skip kernel autotuning, whose temporary buffers caused the out-of-memory crashes.
-export XLA_PYTHON_CLIENT_MEM_FRACTION=${MEM_FRACTION:-0.45}
-export XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_autotune_level=0"
+# CUDA graphs (command buffers) allocate outside that cap, so they are switched off as well.
+export XLA_PYTHON_CLIENT_MEM_FRACTION=${MEM_FRACTION:-0.40}
+export XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer="
 
 M=(--active-modalities audio.egemapsv2 audio.w2vbert2_embeddings openface2 openpose)
 BASE=(--lr 2e-4 --patience 15 --lambda-ccc 1.0)
