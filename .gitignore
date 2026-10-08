@@ -220,3 +220,6 @@ EngageNet_venv/
 models/
 models_*/
 submissions/
+logs/
+sweep_ckpts/
+sweep_out/
