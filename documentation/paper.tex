@@ -306,13 +306,13 @@
 	$$\frac{\partial\bigl(-\ln p\bigr)}{\partial \mu} = \kappa\left[\ln\frac{1-y}{y} + \psi(\mu\kappa) - \psi\bigl((1-\mu)\kappa\bigr)\right] \;\propto\; \kappa .$$
 	The correction the mean receives is thus multiplied by the model's own confidence, so frames it is already sure about push hardest and frames it is unsure about barely move it - the opposite of what we want, since the uncertain frames are the ones with something left to learn. This is a known failure of likelihood training with predicted uncertainty \cite{seitzer2022}. We fix it by scaling each frame's loss by $w_t = \kappa_t^{-\beta_w}$, giving $\mathcal{L}_{\text{NLL}}^{w} = \sum_t w_t \mathcal{L}_{\text{NLL},t} / \sum_t w_t$ and a correction proportional to $\kappa^{1-\beta_w}$; $\beta_w = 0$ leaves the likelihood untouched and $\beta_w = 1$ removes the confidence factor completely, and we use $\beta_w = 0.5$. Crucially $w_t$ is computed from the current $\alpha_t, \beta_t$ but treated as a fixed number when derivatives are taken, so no gradient flows back through it. Were it differentiable, $w_t$ would become part of the objective: the model could then lower the loss by shifting its confidence so as to shrink the weight, rather than by predicting better, and the best $\kappa$ would no longer be the one the likelihood asks for. Treated as a constant, $w_t$ changes only how strongly each frame pulls, not where the pull ends - any point at which every frame's likelihood gradient vanishes is still a stationary point of the weighted loss. In practice $w_t$ is recomputed from the current prediction at every training step and discarded after the update; it is never learned. The ablation of Section \ref{sec:results} measures what the reweighting contributes.
 	
-	\textbf{Ordering term.} $\widehat{\text{CCC}}$ is the sample concordance coefficient of Section 4.1 computed on the predicted means and the targets of the current minibatch, pooled across both roles and all frames in it. Every ingredient - the two means, the two variances, the covariance - is a smooth function of the predictions, so the term can be differentiated, and since $\text{CCC} = \rho\,C_b$, minimising $1-\widehat{\text{CCC}}$ pushes on exactly the factor the likelihood leaves loose. Two limitations follow from estimating it on a batch. It is biased when the batch is small, because the same frames supply both the moments and the ratio built from them; and it reflects the pooled quantity we are scored on only if the batch spans several sessions, since a batch from one session measures ordering within that session alone. Batches are accordingly drawn from windows of several sessions.
+	\textbf{Ordering term.} $\widehat{\text{CCC}}$ is the sample concordance coefficient of Section 4.1 computed on the predicted means and the targets of the current minibatch, pooled across both roles and all frames in it. Every ingredient - the two means, the two variances, the covariance - is a smooth function of the predictions, so the term can be differentiated, and since $\text{CCC} = \rho\,C_b$, minimising $1-\widehat{\text{CCC}}$ pushes on exactly the factor the likelihood leaves loose. Two limitations follow from estimating it on a batch. It is biased when the batch is small, because the same frames supply both the moments and the ratio built from them; and it reflects the pooled quantity we are scored on only if the batch spans several sessions, since a batch from one session measures ordering within that session alone. Batches are accordingly assembled from windows drawn at random from all sessions of the training split; Section \ref{sec:batches} shows how much this matters.
 	
 	\textbf{Per-modality supervision.} Each auxiliary head is trained on the target of the role whose stream it reads. This keeps every modality branch predictive in its own right instead of drifting into whatever representation happens to suit the fusion stage, and it supplies the calibrated per-modality distributions that test-time adaptation (Section 2.6) compares against each other. Dividing by $M$ keeps this contribution from growing with the number of streams: at $\lambda_u = 0.5$ and $M$ streams the undivided sum would outweigh the multimodal term by $\lambda_u M$, which for the core configuration is a factor of four - so most of the gradient would come from heads that are thrown away at evaluation time.
 	
 	\textbf{Fairness term.} The Conditional Demographic Disparity of Section 4.2 is built from differences of group averages inside strata of the ground truth, and every step is differentiable, so it can be trained against rather than only measured. Splitting the batch into $n_b$ quantile bins $\mathcal{B}_1,\dots,\mathcal{B}_{n_b}$ of the target, and writing $\overline{\hat{\mu}}^{\,A}_b$ and $\overline{\hat{\mu}}^{\,B}_b$ for each group's mean prediction inside bin $b$, we penalise
 	$$\mathcal{L}_{\text{fair}} = \frac{\sum_{b=1}^{n_b} |\mathcal{B}_b| \left(\overline{\hat{\mu}}^{\,A}_b - \overline{\hat{\mu}}^{\,B}_b\right)^{2}}{\sum_{b=1}^{n_b} |\mathcal{B}_b|},$$
-	with bins missing either group left out of both sums. Squaring removes the sign, so the term is smallest exactly when the two groups get the same prediction at the same true engagement, and weighting by bin size matches how the metric is estimated at evaluation. Note that the penalty is identically zero on a batch containing only one group, so batches must mix groups for it to do anything. With $8$ windows per batch this is frequently violated at the level of individual bins, and in the ablation of Section \ref{sec:results} the term has no measurable effect at $\lambda_f = 0.05$.
+	with bins missing either group left out of both sums. Squaring removes the sign, so the term is smallest exactly when the two groups get the same prediction at the same true engagement, and weighting by bin size matches how the metric is estimated at evaluation. Note that the penalty is identically zero on a batch containing only one group, so batches must mix groups for it to do anything. With $8$ windows per batch this is frequently violated at the level of individual bins, and in the ablations of Section \ref{sec:results} the term has no measurable effect on $\text{CDD}_G$ at $\lambda_f = 0.05$.
 
 	\subsection{Test-Time Loss Derivations}
 	
@@ -548,7 +548,7 @@
 	\textbf{Window-level scores are not session-level scores.} The validation score logged during training pools the raw overlapping windows instead of reassembled sessions, so interior frames enter twice. The two quantities differ, and not in a fixed direction: for the same checkpoints we measured $0.7942$ (window-level) against $0.6987$ (session-level) on NoXi, and $0.4887$ against $0.5298$ on NoXi+J. Checkpoints are still selected on the window-level score; re-scoring every saved checkpoint of the NoXi run at session level (epochs $10$, $16$, $20$, $30$: $0.6732$, $0.6987$, $0.6267$, $0.6472$) confirmed that the selected epoch $16$ was also the best of those available.
 
 	\subsection{Seed Variability}
-	Training is stochastic: the initial weights, the order of training sessions and the Gumbel noise all depend on a random seed. Two runs that differ only in the seed produce different models and different scores, and a comparison between two configurations is only meaningful if their difference exceeds this spread. Every configuration below was therefore trained with three seeds ($95$, $1$, $2$), and we report the mean and the sample standard deviation.
+	Training is stochastic: the initial weights, the order of training sessions and the Gumbel noise all depend on a random seed. Two runs that differ only in the seed produce different models and different scores, and a comparison between two configurations is only meaningful if their difference exceeds this spread. Every configuration below was therefore trained with at least three seeds ($95$, $1$, $2$; the two configurations that decide the final input set also $3$, $4$, $5$), and we report the mean and the sample standard deviation. The experiment of this subsection was made with the original single-session batches of Section \ref{sec:batches}.
 
 	\begin{center}
 	\begin{tabular}{llccc c}
@@ -565,50 +565,95 @@
 
 	The seed-to-seed standard deviation lies between $0.01$ and $0.05$, so single-run differences of that size carry no information. The $20$ s windows ($L = 500$, hop $250$) were tested because after the S4D-Real initialisation the SSM can retain information for up to $\sim\!10^3$ steps, while a $10$ s window resets the state every $250$ steps. On NoXi the longer window changes nothing; on NoXi+J it raises the mean by $0.03$, but with a standard deviation of $0.054$ the difference is not established.
 
+	\subsection{Batch Composition}
+	\label{sec:batches}
+	The windows of a training batch were originally taken in order from the data stream, which walks through one session before starting the next. With a few hundred windows per session, practically every batch of $8$ windows therefore came from a single session, and a single session contains exactly two people. This matters for three parts of the objective. The ordering term can then only learn the order of frames \emph{within} one conversation, whereas the evaluation pools all sessions and also rewards placing whole sessions correctly relative to one another (Section \ref{sec:objective}). The fairness term is active only when that one pair happens to be of mixed gender. And consecutive batches are strongly correlated, which makes the gradient noisy.
+
+	We therefore load the active streams of all training sessions into memory once and draw every batch from a random permutation of all windows of all sessions, re-shuffled each epoch; a batch now almost always mixes several sessions. The full objective was retrained under both schemes, three seeds each:
+
+	\begin{center}
+	\begin{tabular}{lcccc}
+		\toprule
+		& \multicolumn{2}{c}{\textbf{NoXi}} & \multicolumn{2}{c}{\textbf{NoXi+J}} \\
+		\textbf{Training batches} & \textbf{CCC} & \textbf{mean} $|\text{CDD}_G|$ & \textbf{CCC} & \textbf{mean} $|\text{CDD}_G|$ \\
+		\midrule
+		One session per batch & $0.709 \pm 0.009$ & $0.0069$ & $0.529 \pm 0.020$ & $0.0249$ \\
+		Mixed sessions & $0.724 \pm 0.008$ & $0.0064$ & $\mathbf{0.599 \pm 0.029}$ & $0.0121$ \\
+		$\Delta$ ($p$, Welch) & $+0.015$ $(0.10)$ & & $+0.070$ $(0.03)$ & \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+
+	Mixing sessions improves NoXi+J significantly and NoXi in the same direction. The gender disparity on NoXi+J halves (per seed $0.009$, $0.016$, $0.012$, against $0.000$, $0.039$, $0.036$ before), but with three seeds the difference is not significant ($p = 0.41$). One NoXi+J seed was by mistake trained twice concurrently into the same directory; the two copies scored $0.585$ and $0.624$, of which the table uses the later one, and the improvement remains significant with either. All results from here on use mixed batches unless stated otherwise.
+
 	\subsection{Ablation of the Training Objective}
-	Each auxiliary term of the objective of Section \ref{sec:objective} was removed in turn, keeping everything else fixed ($10$ s windows, three seeds each). The base likelihood itself is kept in every variant: without it the concentration $\kappa = \alpha + \beta$ is not constrained by any term. Differences to the full objective are tested with a two-sided Welch $t$-test ($n = 3$ per group).
+	Each auxiliary term of the objective of Section \ref{sec:objective} was removed in turn, keeping everything else fixed ($10$ s windows, core features, three seeds per variant). The base likelihood itself is kept in every variant: without it the concentration $\kappa = \alpha + \beta$ is not constrained by any term. We ran the ablation twice, once under each batch scheme of Section \ref{sec:batches}, since it turned out to matter. Each entry is the change of the three-seed mean relative to the full objective under the same scheme, with the two-sided Welch $p$-value in parentheses.
+
+	\begin{center}
+	\small
+	\begin{tabular}{lcccc}
+		\toprule
+		& \multicolumn{2}{c}{\textbf{One session per batch}} & \multicolumn{2}{c}{\textbf{Mixed sessions}} \\
+		\textbf{Variant} & \textbf{NoXi} & \textbf{NoXi+J} & \textbf{NoXi} & \textbf{NoXi+J} \\
+		\midrule
+		Full objective (mean $\pm$ sd) & $0.709 \pm 0.009$ & $0.529 \pm 0.020$ & $0.724 \pm 0.008$ & $0.599 \pm 0.029$ \\
+		\midrule
+		No ordering ($\lambda_c = 0$) & $-0.020$ $(0.20)$ & $\mathbf{-0.132}$ $\mathbf{(0.048)}$ & $+0.008$ $(0.41)$ & $-0.011$ $(0.69)$ \\
+		No per-modality ($\lambda_u = 0$) & $-0.035$ $(0.26)$ & $-0.031$ $(0.44)$ & $-0.008$ $(0.39)$ & $-0.009$ $(0.75)$ \\
+		No reweighting ($\beta_w = 0$) & $-0.037$ $(0.22)$ & $-0.034$ $(0.13)$ & $+0.002$ $(0.87)$ & $+0.004$ $(0.85)$ \\
+		No fairness ($\lambda_f = 0$) & $+0.001$ $(0.91)$ & $-0.019$ $(0.69)$ & $-0.028$ $(0.06)$ & $-0.026$ $(0.26)$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+
+	\textbf{Ordering term.} With single-session batches, removing $\lambda_c(1 - \widehat{\text{CCC}})$ causes the largest loss and the only individually significant one: on NoXi+J the mean falls from $0.529$ to $0.396$. With mixed batches its removal has no measurable effect. A plausible explanation, which we have not tested directly, is that a single-session batch shows the likelihood only one conversation at a time, so it cannot learn that one session is on the whole more engaged than another, and the ordering term compensates for this; once a batch mixes sessions, the likelihood sees those differences itself. Whatever the mechanism, the result shows that the value of a loss term cannot be judged independently of how the batches it is computed on are composed.
+
+	\textbf{Per-modality supervision and likelihood reweighting.} With single-session batches, removing either lowers the mean by $0.03$ to $0.04$ on both corpora - not significant individually, but consistent in all four cases. With mixed batches both effects shrink below $0.01$. Neither term is shown to help in the final setting; neither is shown to hurt.
+
+	\textbf{Fairness term.} With single-session batches its removal changes nothing. With mixed batches it lowers the mean by about $0.027$ on both corpora ($p = 0.06$ and $0.26$), a consistent direction suggesting that the term may act as a regulariser. Its effect on the quantity it targets is not measurable in either scheme:
+
+	\begin{center}
+	\small
+	\begin{tabular}{llcc}
+		\toprule
+		\textbf{Batches} & \textbf{Variant} & \textbf{NoXi} mean $|\text{CDD}_G|$ & \textbf{NoXi+J} mean $|\text{CDD}_G|$ \\
+		\midrule
+		One session & $\lambda_f = 0.05$ & $0.0069$ & $0.0249$ \\
+		One session & $\lambda_f = 0$ & $0.0118$ & $0.0258$ \\
+		Mixed & $\lambda_f = 0.05$ & $0.0064$ & $0.0121$ \\
+		Mixed & $\lambda_f = 0$ & $0.0074$ $(p = 0.89)$ & $0.0163$ $(p = 0.53)$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+
+	\textbf{What the ablation can and cannot show.} With three seeds per group and a seed standard deviation of $0.01$ to $0.03$, only differences of roughly $0.04$ or more are detectable; after correcting for the eight comparisons of the mixed-batch ablation (Holm), none of them is significant. We therefore keep the full objective: no term is shown to hurt, and dropping one on the basis of these differences would itself be a decision made on noise.
+
+	\subsection{Input Features}
+	\label{sec:features}
+	The model so far reads the four core streams (eGeMAPS, W2v-BERT, OpenFace2, OpenPose). All ten feature types of the challenge release are available for every split of both corpora, test included. We added them in groups to the core set: text (the XLM-RoBERTa embedding of the transcript), image embeddings (DINO, ImageBind, Swin), video embeddings (VideoMAE, CLIP), and all ten together. The core set and core plus text were trained with six seeds, the others with three; $\Delta$ and $p$ are relative to the core set.
 
 	\begin{center}
 	\small
 	\begin{tabular}{lcccccc}
 		\toprule
 		& \multicolumn{3}{c}{\textbf{NoXi}} & \multicolumn{3}{c}{\textbf{NoXi+J}} \\
-		\textbf{Variant} & \textbf{Mean $\pm$ sd} & $\Delta$ & $p$ & \textbf{Mean $\pm$ sd} & $\Delta$ & $p$ \\
+		\textbf{Inputs} & \textbf{Mean $\pm$ sd} & $\Delta$ & $p$ & \textbf{Mean $\pm$ sd} & $\Delta$ & $p$ \\
 		\midrule
-		Full & $0.709 \pm 0.009$ & -- & -- & $0.529 \pm 0.020$ & -- & -- \\
-		No ordering ($\lambda_c = 0$) & $0.689 \pm 0.019$ & $-0.020$ & $0.20$ & $0.396 \pm 0.059$ & $-0.132$ & $0.048$ \\
-		No per-modality ($\lambda_u = 0$) & $0.674 \pm 0.040$ & $-0.035$ & $0.26$ & $0.498 \pm 0.055$ & $-0.031$ & $0.44$ \\
-		No reweighting ($\beta_w = 0$) & $0.672 \pm 0.037$ & $-0.037$ & $0.22$ & $0.495 \pm 0.024$ & $-0.034$ & $0.13$ \\
-		No fairness ($\lambda_f = 0$) & $0.710 \pm 0.009$ & $+0.001$ & $0.91$ & $0.510 \pm 0.071$ & $-0.019$ & $0.69$ \\
+		Core 4 & $0.726 \pm 0.010$ & -- & -- & $0.593 \pm 0.023$ & -- & -- \\
+		+ text & $0.731 \pm 0.020$ & $+0.005$ & $0.58$ & $\mathbf{0.641 \pm 0.018}$ & $\mathbf{+0.047}$ & $\mathbf{0.003}$ \\
+		+ image & $0.701 \pm 0.017$ & $-0.025$ & $0.11$ & $0.593 \pm 0.020$ & $-0.001$ & $0.97$ \\
+		+ video & $0.712 \pm 0.027$ & $-0.014$ & $0.47$ & $0.509 \pm 0.033$ & $-0.084$ & $0.03$ \\
+		All ten & $0.714 \pm 0.017$ & $-0.012$ & $0.34$ & $0.641 \pm 0.038$ & $+0.048$ & $0.15$ \\
 		\bottomrule
 	\end{tabular}
 	\end{center}
 
-	\textbf{Ordering term.} Removing $\lambda_c(1 - \widehat{\text{CCC}})$ causes the largest loss, and the only one that is individually significant: on NoXi+J the mean falls from $0.529$ to $0.396$. It is also the only term that addresses the evaluation metric directly; the likelihood grades each frame separately and has no term that rewards the correct relative order of frames.
+	The text stream is the only addition that helps, and on NoXi+J it does so significantly. The two input sets that contain it are the two best on NoXi+J, and all three sets without it are at or below the core set; adding all ten streams brings nothing over text alone and takes about $2.5$ times longer to train. On NoXi the text stream is neutral. The image embeddings add nothing, and the video embeddings significantly harm NoXi+J. We adopt core plus text as the final input set.
 
-	\textbf{Per-modality supervision and likelihood reweighting.} Removing either lowers the mean by $0.03$ to $0.04$ on both corpora. With three seeds per group none of these four differences is significant on its own, but all four point in the same direction. We read this as consistent evidence of a small benefit, not as a demonstrated one.
-
-	\textbf{Stability.} The full objective also gives the most reproducible results: in $7$ of the $8$ ablated configurations the seed-to-seed standard deviation is larger than that of the full objective (NoXi: $0.009$ against up to $0.040$; NoXi+J: $0.020$ against up to $0.071$). The auxiliary terms therefore reduce the variance of training as well as, on average, raising its outcome.
-
-	\textbf{Fairness term.} Removing the fairness penalty costs no accuracy. It also has no measurable effect on the quantity it targets:
-
-	\begin{center}
-	\small
-	\begin{tabular}{lcccc}
-		\toprule
-		& \multicolumn{2}{c}{\textbf{NoXi}, $\text{CDD}_G$} & \multicolumn{2}{c}{\textbf{NoXi+J}, $\text{CDD}_G$} \\
-		& \textbf{per seed} & \textbf{mean} $|\cdot|$ & \textbf{per seed} & \textbf{mean} $|\cdot|$ \\
-		\midrule
-		$\lambda_f = 0.05$ & $+0.0056,\ -0.0122,\ +0.0029$ & $0.0069$ & $-0.0003,\ -0.0387,\ -0.0357$ & $0.0249$ \\
-		$\lambda_f = 0$ & $+0.0015,\ -0.0152,\ -0.0188$ & $0.0118$ & $-0.0288,\ -0.0233,\ -0.0253$ & $0.0258$ \\
-		\bottomrule
-	\end{tabular}
-	\end{center}
-
-	The gender disparity is small in both conditions and does not decrease when the penalty is active. Two properties of the current setting plausibly explain this. The weight $\lambda_f = 0.05$ is small next to the other terms, and a batch holds only $8$ windows, so after splitting its frames into $n_b = 10$ quantile bins many bins contain only one gender and contribute nothing to $\mathcal{L}_{\text{fair}}$ (Section \ref{sec:objective}). A larger weight and batches assembled to contain both genders are the natural next steps; as the objective stands, the fairness term should be reported as inactive rather than as effective.
+	The window-length comparison of the seed-variability experiment was made with single-session batches and core features and has not been repeated in the final setting; the final configuration keeps $10$ s windows.
 
 	\subsection{Cross-Corpus Transfer: a Shift in Label Scale}
-	A model trained on one corpus and evaluated on the other scores close to zero. The decomposition $\text{CCC} = \rho\,C_b$ of Section \ref{sec:ccc} shows where the loss arises:
+	The analyses of this and the next subsection were made with models trained on single-session batches and core features (Sections \ref{sec:batches} and \ref{sec:features}); we have not repeated them in the final setting, but nothing in them depends on those choices. A model trained on one corpus and evaluated on the other scores close to zero. The decomposition $\text{CCC} = \rho\,C_b$ of Section \ref{sec:ccc} shows where the loss arises:
 
 	\begin{center}
 	\begin{tabular}{llccccc}
@@ -650,9 +695,9 @@
 	No setting changes the cross-corpus score by more than $0.004$. In-corpus, the smaller learning rate is neutral within seed noise ($+0.004$) and the larger one is harmful ($-0.05$ to $-0.11$). At the design quantiles $(0.3, 0.7)$ the filter selects only $2$ to $6\%$ of the windows, far below the $9\%$ that two independent conditions of $30\%$ each would give; presumably the fused and the unimodal uncertainties tend to rise and fall together, which makes the joint condition rare, although we have not measured this correlation. Taken together with the previous subsection, the result is a clear negative one: in its current form the adaptation neither closes the cross-corpus gap, which lies in the label scale, nor improves in-corpus predictions. All other results in this document are obtained without it.
 
 	\subsection{Ensembling}
-	For each corpus we average, frame by frame, the predictions of six models: the three seeds of the seed-variability experiment above, at both window lengths. Every member is trained on the training split only, and all six are used; no member is chosen by its validation score, since selecting the best single run would mostly select the luckiest seed.
+	For each corpus we average, frame by frame, the predictions of the six seeds of the final configuration (core features plus text, mixed batches, full objective, $10$ s windows). Every member is trained on the training split only, and all six are used; no member is chosen by its validation score, since selecting the best single run would mostly select the luckiest seed.
 
-	\textbf{Label-free rescaling.} Averaging cancels the members' independent errors but also flattens the prediction: on NoXi+J the members' predictions have a standard deviation of about $0.10$, the ensemble's only $0.082$, against $0.102$ for the annotations. This lowers $C_b$. We therefore stretch the ensemble back to the average spread and level of its members,
+	\textbf{Label-free rescaling.} Averaging cancels the members' independent errors but also flattens the prediction: on NoXi+J the members' predictions have a standard deviation of $0.086$ on average, the ensemble's only $0.078$, against $0.102$ for the annotations. This lowers $C_b$. We therefore stretch the ensemble back to the average spread and level of its members,
 	$$\hat{y}'_t = \bar{\mu}_{\text{mem}} + \bigl(\hat{y}_t - \mu_{\text{ens}}\bigr)\,\frac{\bar{\sigma}_{\text{mem}}}{\sigma_{\text{ens}}},$$
 	where $\mu_{\text{ens}}$ and $\sigma_{\text{ens}}$ are the mean and standard deviation of the ensemble over all frames of the split, and $\bar{\mu}_{\text{mem}}$, $\bar{\sigma}_{\text{mem}}$ are the averages of the members' own means and standard deviations over the same frames; the result is clipped to $[0,1]$. Only predictions enter this transformation, never annotations, so it applies unchanged to the test split. Being affine, it leaves $\rho$ untouched and can only move $C_b$.
 
@@ -662,16 +707,34 @@
 		& \multicolumn{3}{c}{\textbf{NoXi}} & \multicolumn{3}{c}{\textbf{NoXi+J}} \\
 		\textbf{Predictor} & \textbf{CCC} & $\rho$ & $C_b$ & \textbf{CCC} & $\rho$ & $C_b$ \\
 		\midrule
-		Single model, $10$ s (mean of 3 seeds) & $0.709$ & -- & -- & $0.529$ & -- & -- \\
-		Ensemble, 3 seeds, $10$ s & $0.728$ & $0.734$ & $0.992$ & $0.615$ & $0.641$ & $0.959$ \\
-		Ensemble, 3 seeds, $20$ s & $0.736$ & $0.743$ & $0.990$ & $0.621$ & $0.647$ & $0.961$ \\
-		Ensemble, all 6 & $0.740$ & $0.746$ & $0.991$ & $0.643$ & $0.677$ & $0.951$ \\
-		Ensemble, all 6, rescaled & $\mathbf{0.742}$ & $0.746$ & $0.995$ & $\mathbf{0.661}$ & $0.677$ & $0.977$ \\
+		Single model (mean of 6 seeds) & $0.731$ & -- & -- & $0.641$ & -- & -- \\
+		Ensemble of 6 seeds & $0.756$ & $0.761$ & $0.993$ & $0.696$ & $0.744$ & $0.936$ \\
+		Ensemble of 6 seeds, rescaled & $\mathbf{0.758}$ & $0.761$ & $0.996$ & $\mathbf{0.714}$ & $0.744$ & $0.959$ \\
 		\bottomrule
 	\end{tabular}
 	\end{center}
 
-	Ensembling raises the correlation itself, from $0.703$ to $0.746$ on NoXi and from $0.530$ to $0.677$ on NoXi+J (single models of seed $95$), which is precisely the factor that the correlation ceiling of Section \ref{sec:ccc} identifies as the only remaining margin. The rescaling then recovers most of the accuracy lost to averaging. Two caveats apply: the choice of six members over three and the decision to rescale were made on the validation split, so the final numbers are slightly optimistic; and an ensemble is a statement about the best system we can build, not about the method. We therefore report the single-model mean over seeds as the estimate of the method and the rescaled six-model ensemble as the submitted system.
+	Ensembling raises the correlation itself, which is precisely the factor that the correlation ceiling of Section \ref{sec:ccc} identifies as the only remaining margin; the rescaling then recovers part of the accuracy lost to averaging. On NoXi+J a gap in $C_b$ remains, almost entirely from the level: the ensemble predicts $0.812$ on average against $0.834$ in the annotations. Two caveats apply: the decision to rescale was made on the validation split, so the final numbers are slightly optimistic; and an ensemble is a statement about the best system we can build, not about the method. We therefore report the single-model mean over seeds as the estimate of the method and the rescaled six-seed ensemble as the submitted system.
+
+	\subsection{Summary}
+	\begin{center}
+	\begin{tabular}{lcc}
+		\toprule
+		\textbf{Validation CCC} & \textbf{NoXi} & \textbf{NoXi+J} \\
+		\midrule
+		Single model, single-session batches, core features (3 seeds) & $0.709$ & $0.529$ \\
+		+ mixed-session batches (Section \ref{sec:batches}, 3 seeds) & $0.724$ & $0.599$ \\
+		+ text stream (Section \ref{sec:features}, 6 seeds) & $0.731$ & $0.641$ \\
+		Six-seed ensemble, rescaled (submitted system) & $\mathbf{0.758}$ & $\mathbf{0.714}$ \\
+		\midrule
+		\multicolumn{3}{l}{\textit{For reference, MultiMediate'26 test leaderboard}} \\
+		Official baseline & $0.55$ & $0.31$ \\
+		Best entry & $0.82$ & $0.66$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+	Our numbers are on the validation split and the leaderboard's on the test split, so the comparison is indicative only. The submitted test predictions (NoXi test-base and test-additional, NoXi+J test) are produced by the same rescaled six-seed ensemble.
+
 
 	\newpage
 	\section{Hyperparameters}
@@ -687,8 +750,9 @@
 		\multicolumn{3}{l}{\textit{Data}} \\
 		$L$ & Window length (frames; $10$ s at $25$ Hz) & $250$ \\
 		-- & Window hop (frames; $50\%$ overlap) & $125$ \\
-		-- & Active feature types $|\mathcal{F}|$ (core subset) & $4$ \\
-		$M$ & Role-feature pairs $= 2|\mathcal{F}|$ & $8$ \\
+		-- & Feature types $|\mathcal{F}|$ (core $4$ + text) & $5$ \\
+		$M$ & Role-feature pairs $= 2|\mathcal{F}|$ & $10$ \\
+		-- & Training batches & mixed sessions \\
 		$\varepsilon$ & Target clipping bound & $10^{-6}$ \\
 		\midrule
 		\multicolumn{3}{l}{\textit{Architecture}} \\
@@ -715,7 +779,7 @@
 		-- & Batch size & $8$ \\
 		-- & Maximum epochs & $50$ \\
 		-- & Early-stopping patience (epochs, on val CCC) & $15$ \\
-		-- & Seeds for reported results & $95,\ 1,\ 2$ \\
+		-- & Seeds (final configuration: 6) & $95, 1, 2\,(3, 4, 5)$ \\
 		$\lambda_c$ & Weight of the ranking (CCC) term & $1.0$ \\
 		$\lambda_u$ & Unimodal deep-supervision weight (before $1/M$) & $0.5$ \\
 		$\lambda_f$ & Fairness penalty weight & $0.05$ \\
