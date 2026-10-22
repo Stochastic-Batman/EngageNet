@@ -28,7 +28,7 @@ from read_data import log
 
 def main() -> None:
     B, Lp, Cp, M = 2, 250, 128, 8  # 4 modalities x 2 roles
-    D = M * Cp  # MC' = 1024
+    D = M * Cp  # MC' = 1024 (output width); the block itself runs at width C'
 
     rng = jax.random.PRNGKey(95)
     rng_init, rng_gumbel, rng_data = jax.random.split(rng, 3)
@@ -38,7 +38,7 @@ def main() -> None:
     keys = sorted(keys)
     hiddens = {k: jax.random.normal(jax.random.fold_in(rng_data, i), (B, Lp, Cp)) for i, k in enumerate(keys)}
 
-    model = InterModalBiMamba(D=D, N=16, D_C=4, GS_dim=64, n_iters=20)
+    model = InterModalBiMamba(D=Cp, N=16, D_C=4, GS_dim=64, n_iters=20)
 
     variables = model.init(rng_init, hiddens, tau=1.0, rng=rng_gumbel, train=False)
     param_count = sum(x.size for x in jax.tree.leaves(variables["params"]))
@@ -64,6 +64,25 @@ def main() -> None:
     log.info(f"P col sums max error: {jnp.abs(col_sums - 1.0).max():.6f}")
     assert jnp.abs(row_sums - 1.0).max() < 1e-3, "P rows don't sum to 1"
     assert jnp.abs(col_sums - 1.0).max() < 1e-3, "P cols don't sum to 1"
+
+    # Fixed orders: P is a constant permutation matrix, no meta-network parameters, and P is read out via sow
+    from inter_modal import FIXED_ORDERS, fixed_permutation
+    _, inter = model.apply(variables, hiddens, tau=1.0, rng=None, train=False, mutable=["batch_stats", "intermediates"])
+    assert inter["intermediates"]["P"][0].shape == (B, M, M), "learned P not sown"
+    for name in FIXED_ORDERS:
+        perm = fixed_permutation(keys, name)
+        assert sorted(perm.tolist()) == list(range(M)), f"{name} is not a permutation"
+        fixed = InterModalBiMamba(D=Cp, N=16, D_C=4, GS_dim=64, n_iters=20, fixed_order=name)
+        fv = fixed.init(rng_init, hiddens, tau=1.0, rng=rng_gumbel, train=False)
+        assert "gumbel_sinkhorn" not in fv["params"], f"{name}: meta-network should be absent"
+        assert set(fv["params"]) == set(variables["params"]) - {"gumbel_sinkhorn"}, f"{name}: parameter tree differs"
+        (Hf, inter) = fixed.apply(fv, hiddens, tau=0.3, rng=rng_gumbel, train=False, mutable=["batch_stats", "intermediates"])
+        Pf = inter["intermediates"]["P"][0]
+        assert jnp.all((Pf == 0) | (Pf == 1)) and jnp.all(Pf.sum(-1) == 1) and jnp.all(Pf.sum(-2) == 1), f"{name}: P not a permutation matrix"
+        assert Hf.shape == (B, Lp, D)
+        log.info(f"fixed order {name}: {[keys[j] for j in perm]}")
+    interleaved = fixed_permutation(keys, "interleaved")
+    assert [keys[j].split(".", 1)[1] for j in interleaved[:2]] == [keys[0].split(".", 1)[1]] * 2, "interleaved should pair roles"
 
     log.info("All checks passed!")
 

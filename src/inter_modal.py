@@ -3,6 +3,7 @@ from __future__ import annotations
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from jax.scipy.special import logsumexp
 
@@ -48,12 +49,38 @@ class GumbelSinkhorn(nn.Module):
         return P
 
 
+FIXED_ORDERS = ("blocked", "interleaved", "rand0", "rand1")
+
+
+# keys: sorted stream names "{role}.{feat}" ; name: one of FIXED_ORDERS -> perm with perm[i] = index of the stream placed at position i
+def fixed_permutation(keys: list[str], name: str) -> np.ndarray:
+    M = len(keys)
+    if name == "blocked":  # sorted order = all expert streams, then all novice streams
+        return np.arange(M)
+    if name == "interleaved":  # expert and novice stream of each feature type side by side
+        feats = sorted({k.split(".", 1)[1] for k in keys})
+        roles = sorted({k.split(".", 1)[0] for k in keys})
+        return np.array([keys.index(f"{r}.{f}") for f in feats for r in roles if f"{r}.{f}" in keys])
+    if name in ("rand0", "rand1"):  # drawn once from a fixed seed, independent of the training seed
+        return np.random.default_rng(int(name[-1])).permutation(M)
+    raise ValueError(f"unknown fixed order {name!r}; expected one of {FIXED_ORDERS}")
+
+
+# perm: (M,) -> P: (M, M) permutation matrix with P[i, perm[i]] = 1
+def permutation_matrix(perm: np.ndarray) -> np.ndarray:
+    M = len(perm)
+    P = np.zeros((M, M), dtype=np.float32)
+    P[np.arange(M), perm] = 1.0
+    return P
+
+
 class InterModalBiMamba(nn.Module):
     D: int                  # BiMamba hidden dim
     N: int                  # SSM state dim
     D_C: int                # depthwise conv kernel size
     GS_dim: int = 64         # Gumbel-Sinkhorn projection dim
     n_iters: int = 10       # Sinkhorn iterations
+    fixed_order: str | None = None  # None = learned (Gumbel-Sinkhorn); else a name from FIXED_ORDERS -> constant P, no meta-network
     dt_min: float = 1e-3
     dt_max: float = 1e-1
 
@@ -67,8 +94,13 @@ class InterModalBiMamba(nn.Module):
 
         summaries = stacked.mean(axis=2)  # Temporal mean-pool each modality -> summaries (B, M, C')
 
-        gs = GumbelSinkhorn(M=M, d_key=self.GS_dim, n_iters=self.n_iters, name="gumbel_sinkhorn")
-        P = gs(summaries, tau=tau, rng=rng)  # (B, M, M)
+        if self.fixed_order is None:
+            gs = GumbelSinkhorn(M=M, d_key=self.GS_dim, n_iters=self.n_iters, name="gumbel_sinkhorn")
+            P = gs(summaries, tau=tau, rng=rng)  # (B, M, M)
+        else:
+            P_fixed = jnp.asarray(permutation_matrix(fixed_permutation(keys, self.fixed_order)))  # (M, M)
+            P = jnp.broadcast_to(P_fixed, (B, M, M)).astype(stacked.dtype)  # (B, M, M)
+        self.sow("intermediates", "P", P)  # read out with mutable=["intermediates"]; a no-op otherwise
 
         reordered = jnp.einsum("bij,bjlc->bilc", P, stacked)  # reordered[b,i] = sum_j P[b,i,j] * stacked[b,j] -> (B, M, L', C')
 

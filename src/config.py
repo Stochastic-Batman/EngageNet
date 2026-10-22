@@ -99,6 +99,7 @@ class EngageNetConfig:
     # Gumbel-Sinkhorn
     gs_dim: int = 64               # query/key projection dim for score matrix
     gs_iters: int = 20             # Sinkhorn normalisation iterations
+    fixed_order: Optional[str] = None  # None = learned ordering; else blocked | interleaved | rand0 | rand1 (constant P)
 
     # Beta head
     beta_hidden: int = 128         # hidden layer width in BetaHead
@@ -172,6 +173,7 @@ class EngageNetConfig:
         parser.add_argument("--conv-kernel", type=int, default=4)
         parser.add_argument("--gs-dim", type=int, default=64)
         parser.add_argument("--gs-iters", type=int, default=10)
+        parser.add_argument("--fixed-order", type=str, default=None, choices=["blocked", "interleaved", "rand0", "rand1"])
         parser.add_argument("--beta-hidden", type=int, default=128)
         parser.add_argument("--checkpoint-dir", type=str, default=None)
         parser.add_argument("--lambda-ccc", type=float, default=1.0)
@@ -216,6 +218,7 @@ class EngageNetConfig:
             conv_kernel=args.conv_kernel,
             gs_dim=args.gs_dim,
             gs_iters=args.gs_iters,
+            fixed_order=args.fixed_order,
             beta_hidden=args.beta_hidden,
             checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else cls.checkpoint_dir,
             lambda_ccc=args.lambda_ccc,
