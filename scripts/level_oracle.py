@@ -12,8 +12,11 @@ Per corpus it prints:
       level only   mean_p(gt) as a constant            perfect level, no dynamics at all
       true dynamics gt - mean_p(gt) + mean_p(pred)    perfect dynamics, our level
   - how well the level is predicted: Pearson r and mean absolute error of the person means; mean within-person Pearson r
+With --lag-check, also the pooled CCC and mean within-person r (averaged over the single models, and for their mean) when the
+predictions are shifted in time (positive lag = prediction delayed, as if the annotation lags behind the behaviour) or smoothed
+with a centred moving average. Shifts and smoothing stay within one person and pad with the edge value, so lengths are unchanged.
 
-usage (repo root): python scripts/level_oracle.py --corpus NoXi --pred-dirs sweep_out/feat_noxi_t_besttau_s* [--data-root data]
+usage (repo root): python scripts/level_oracle.py --corpus NoXi --pred-dirs sweep_out/feat_noxi_t_besttau_s* [--data-root data] [--lag-check]
 """
 
 from __future__ import annotations
@@ -61,12 +64,57 @@ def report(name: str, gt: list[np.ndarray], pred: list[np.ndarray]) -> None:
           f" | level r {np.corrcoef(pm, gm)[0, 1]:+.3f} MAE {np.abs(pm - gm).mean():.4f} | mean within-person r {np.mean(within_r):+.3f}")
 
 
+FPS = 25
+LAGS_S = (-4, -3, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 4, 6)
+SMOOTH_S = (0, 0.5, 1, 2, 4, 8)
+
+
+def shift(x: np.ndarray, k: int) -> np.ndarray:
+    """y[t] = x[t - k], edge-padded."""
+    if k == 0:
+        return x
+    return np.concatenate([np.full(k, x[0]), x[:-k]]) if k > 0 else np.concatenate([x[-k:], np.full(-k, x[-1])])
+
+
+def smooth(x: np.ndarray, w: int) -> np.ndarray:
+    if w <= 1:
+        return x
+    xp = np.pad(x, (w // 2, w - 1 - w // 2), mode="edge")
+    return np.convolve(xp, np.ones(w) / w, mode="valid")
+
+
+def scores(gt: list[np.ndarray], pred: list[np.ndarray]) -> tuple[float, float]:
+    r = [np.corrcoef(x, y)[0, 1] for x, y in zip(pred, gt) if x.std() > 0 and y.std() > 0]
+    return official_ccc(np.concatenate(pred), np.concatenate(gt)), float(np.mean(r))
+
+
+def lag_check(gt: list[np.ndarray], preds: list[list[np.ndarray]]) -> None:
+    """preds: [model][person] -> prints one line per lag and per smoothing width."""
+    ens = [np.mean([m[i] for m in preds], axis=0) for i in range(len(gt))] if len(preds) > 1 else None
+
+    def line(label: str, f) -> None:
+        single = np.array([scores(gt, [f(x) for x in m]) for m in preds])
+        out = f"  {label:14s} single models: CCC {single[:, 0].mean():.4f}  within r {single[:, 1].mean():+.3f}"
+        if ens is not None:
+            c, r = scores(gt, [f(x) for x in ens])
+            out += f" | mean of {len(preds)}: CCC {c:.4f}  within r {r:+.3f}"
+        print(out)
+
+    print("  -- shift (positive = prediction delayed) --")
+    for s_ in LAGS_S:
+        line(f"lag {s_:+.1f} s", lambda x, k=int(round(s_ * FPS)): shift(x, k))
+    print("  -- centred moving average --")
+    for s_ in SMOOTH_S:
+        line(f"smooth {s_:.1f} s", lambda x, w=int(round(s_ * FPS)): smooth(x, w))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", required=True)
     ap.add_argument("--pred-dirs", nargs="+", required=True)
     ap.add_argument("--data-root", default="data")
     ap.add_argument("--split", default="val")
+    ap.add_argument("--lag-check", action="store_true")
     args = ap.parse_args()
 
     pred_dirs = [Path(d) / args.corpus / args.split for d in args.pred_dirs]
@@ -87,6 +135,8 @@ def main() -> None:
         report(Path(d).name, gt, [x[2][k] for x in people])
     if len(args.pred_dirs) > 1:
         report(f"mean of {len(args.pred_dirs)} (not rescaled)", gt, [np.mean(x[2], axis=0) for x in people])
+    if args.lag_check:
+        lag_check(gt, [[x[2][k] for x in people] for k in range(len(args.pred_dirs))])
 
 
 if __name__ == "__main__":
