@@ -194,7 +194,7 @@
 	    \item \textbf{Efficiency gains:} The feature width shrinks to $C'$, which drops the parameter cost from a heavy $\Theta(M^2C'^2)$ down to just $\Theta(C'^2)$. Additionally, the depth of the dependent math operations (the associative scan) drops from $\lceil\log_2 L'\rceil$ to just $\lceil\log_2 M\rceil$, running on a much smaller state.
 	\end{itemize}
 
-	Finally, the output is stitched back together side-by-side to match the expected format for the final prediction heads: $$H^{(t)} = H_1^{(t)} \circ \dots \circ H_M^{(t)} \in \R^{MC'}$$ which returns the data to its original shape of $H \in \R^{L' \times MC'}$.
+	Before the heads, every slot is returned to the stream it came from. Slot $i$ of the scan holds $\sum_j P_{ij} u_j$, so stream $j$ receives back $\hat{H}^{(t)}_j = \sum_{i=1}^{M} P_{ij} H^{(t)}_i$, i.e.\ the output is multiplied by $P^\top$, which for a permutation is its inverse. Without this step the layout of the heads' input would change from window to window: under an input-dependent $P$, the part of $H$ that the read-out weights associate with slot $3$ would hold, say, the expert's face in one window and the novice's text in the next. With it, part $j$ of $H$ always belongs to stream $j$, and the order influences only the scan, where it is meant to. Finally, the output is stitched back together side-by-side to match the expected format for the final prediction heads: $$H^{(t)} = \hat{H}_1^{(t)} \circ \dots \circ \hat{H}_M^{(t)} \in \R^{MC'}$$ which returns the data to its original shape of $H \in \R^{L' \times MC'}$.
 	
 	\subsection{Differential Entropy and the Failure of Gaussian Assumptions}
 	To adapt the entropy-based selection mechanism of BiMamba-TTA for continuous engagement regression, we transition from Shannon entropy to \textbf{differential entropy}. For a continuous random variable $y$ with probability density $p(y)$, the differential entropy is defined as:
@@ -451,13 +451,11 @@
 	\subsubsection*{Score matrix}
 	A \emph{meta-network} $\phi$ is a small auxiliary network whose sole purpose is to predict how modalities should be ordered, operating on top of the main feature representations without participating in the primary task of engagement prediction. Concretely, $\phi$ maps the set $\{u_i\}_{i=1}^M$ to an $M \times M$ assignment \emph{score} matrix $Z \in \R^{M \times M}$, where the entry $Z_{ij}$ quantifies the fitness of placing modality $j$ at sequence position $i$ in the inter-modal BiMamba: a large value of $Z_{ij}$ means the meta-network believes modality $j$ should be processed at step $i$. Each modality representation is first summarised by temporal mean-pooling:
 	$$\bar{u}_i = \frac{1}{L'}\sum_{t=1}^{L'} u_i^{(t)} \in \R^{C'}.$$
-	Two asymmetric bias-free projections into a score-embedding space of dimension $d_s$ then produce query and key vectors:
-	$$q_i = W_Q\,\bar{u}_i \in \R^{d_s}, \qquad k_j = W_K\,\bar{u}_j \in \R^{d_s},$$
-	where $W_Q, W_K \in \R^{d_s \times C'}$ are learnable parameters shared across modalities. The score is the dot product
-	$$Z_{ij} = q_i^\top k_j .$$
-	\textcolor{red}{Remark: the conventional scaled variant $Z_{ij} = q_i^\top k_j / \sqrt{d_s}$ is \emph{not} currently applied. Because $Z$ is subsequently divided by the annealing temperature $\tau$, an unscaled score of large magnitude has the same effect as a small $\tau$, which drives the Sinkhorn output towards a hard permutation before the annealing schedule intends it to. Introducing the $1/\sqrt{d_s}$ factor is an open item.}
-	
-	The asymmetry of the query-key factorisation is intentional: it allows the model to distinguish between a modality acting as a \emph{context supplier} (the key role) and a modality acting as a \emph{context receiver} (the query role), and assigns independent scores to each direction. A symmetric formulation $Z_{ij} = z_i^\top z_j$ would force $Z = Z^\top$, which in turn constrains the learned permutation matrix $P$ to be symmetric. The only symmetric permutation matrices are \emph{involutions} - permutations that are their own inverse ($\pi = \pi^{-1}$), corresponding to products of disjoint transpositions (swaps). This would unnecessarily halve the space of learnable orderings, excluding, for example, cyclic permutations of three or more modalities.
+	A bias-free projection into a score-embedding space of dimension $d_s$ turns each summary into a key, and each \emph{position} has its own learned query vector:
+	$$k_j = W_K\,\bar{u}_j \in \R^{d_s}, \qquad p_i \in \R^{d_s},$$
+	where $W_K \in \R^{d_s \times C'}$ is shared across modalities and $p_1, \dots, p_M$ are free parameters. The score is the scaled dot product
+	$$Z_{ij} = \frac{p_i^\top k_j}{\sqrt{d_s}} .$$
+	Row $i$ of $Z$ therefore asks how well each stream fits position $i$, and column $j$ how well stream $j$ fits each position: rows and columns index different kinds of objects. Our first formulation used a query computed from the data, $q_i = W_Q\,\bar{u}_i$, so that $Z_{ij} = q_i^\top k_j$ compared stream $i$ with stream $j$ and contained no notion of position at all; it also made the result depend on how the streams are numbered (see below). The division by $\sqrt{d_s}$ keeps the scores at a magnitude independent of $d_s$, as in scaled dot-product attention. It matters here because $Z$ is next divided by the annealing temperature $\tau$: an unscaled score of large magnitude has the same effect as a small $\tau$ and drives the Sinkhorn output towards a hard assignment before the annealing schedule intends it to. Both changes are evaluated in Section \ref{sec:fixedorder}.
 	
 	\subsubsection*{Gumbel perturbation}
 	The Gumbel distribution is classically used in extreme value theory \cite{gumbel1954} to model the asymptotic distribution of the maximum of a sequence of independent and identically distributed random variables. Its probability density function for location $\mu$ and scale $\beta$ is given by: 
@@ -475,7 +473,7 @@
 	
 	Constraining both rows and columns to sum to $1$ eliminates this issue by enforcing a strict continuous one-to-one assignment map. Following \cite{mena2018}, the doubly-stochastic matrix $P$ is obtained by the iterative Sinkhorn-Knopp algorithm, which alternates row and column normalisation of $\exp(\tilde{Z})$ until convergence.
 	
-	\textbf{Log-domain implementation.} We do \emph{not} evaluate $\exp(\tilde{Z})$ explicitly. With real feature magnitudes the unscaled scores $Z_{ij}$ reach $10^{4}$--$10^{5}$, so $\exp(\tilde{Z})$ overflows to $+\infty$ in single precision; the subsequent row normalisation then computes $\infty/\infty$ and returns NaN, which propagates through the entire network and destroys training. We therefore carry out the alternating normalisation entirely in log-space.
+	\textbf{Log-domain implementation.} We do \emph{not} evaluate $\exp(\tilde{Z})$ explicitly. With real feature magnitudes the scores of our first, unscaled formulation reached $10^{4}$--$10^{5}$, and nothing bounds the scaled scores during training either, so $\exp(\tilde{Z})$ overflows to $+\infty$ in single precision; the subsequent row normalisation then computes $\infty/\infty$ and returns NaN, which propagates through the entire network and destroys training. We therefore carry out the alternating normalisation entirely in log-space.
 	
 	The operation that replaces division is the \emph{log-sum-exp}, defined for a finite set of reals
 	$\{x_1,\dots,x_n\}$ as
@@ -496,16 +494,18 @@
 	
 	This is algebraically identical to Sinkhorn-Knopp on $\exp(\tilde{Z})$ - each step divides by a row or column sum, which by the identity above is a subtraction of its logarithm - but the largest intermediate quantity is $\max_j \tilde{Z}_{ij}$ rather than $\exp(\max_j \tilde{Z}_{ij})$. The exponential map is applied once, at the end, to values that are by construction non-positive log-probabilities, so the returned entries lie in $(0,1]$ and the gradient operator $\partial P / \partial Z$ remains well-conditioned throughout optimisation.
 
+	The number of iterations matters. Sinkhorn-Knopp reaches a doubly-stochastic matrix only in the limit; after finitely many iterations the result satisfies exactly only the constraint of its last pass, here the columns. With $n_{\text{iter}} = 10$ and unscaled scores, the rows of the learned $P$ summed to between $0.6$ and $2.0$ (Section \ref{sec:fixedorder}), so some positions received about two streams and others about half of one. We therefore use $n_{\text{iter}} = 50$ and check the row and column sums of the learned $P$ on the validation windows.
+
 	\subsubsection*{Soft reordering}
 	With $P$ computed as above, the permuted representation for position $i$ is the $P$-weighted convex combination of all intra-modal outputs. Concretely, the $i$-th row of $P$, denoted $P_{i\cdot} = (P_{i1}, \dots, P_{iM})$, defines a probability distribution over the $M$ modalities; since $P$ is doubly-stochastic, we have $P_{ij} \geq 0$ and $\sum_j P_{ij} = 1$ for every $i$. The soft assignment is then:
 	$$\tilde{u}_i = \sum_{j=1}^{M} P_{ij}\,u_j \in \R^{L' \times C'}, \qquad i \in \{1,\dots,M\}.$$
 	The entry $P_{ij} \in [0,1]$ is the soft probability that modality $j$ is assigned to position $i$ in the inter-modal sequence; when $P$ is close to a hard permutation matrix (as happens after temperature annealing), exactly one $P_{ij}$ per row will be close to 1 and the rest close to 0, recovering a near-discrete assignment. At every time step $t$ the inter-modal BiMamba then processes the reordered sequence $\bigl(\tilde{u}_1^{(t)}, \dots, \tilde{u}_M^{(t)}\bigr)$ instead of $\bigl(u_1^{(t)}, \dots, u_M^{(t)}\bigr)$; all equations of Section \ref{sec:intermodal} remain unchanged under this substitution. Note that $P$ is computed per sample: the ordering is input-dependent, so different sessions may resolve to different modality orderings.
 	
 	\subsubsection*{Inference}
-	At test time, Gumbel noise is suppressed ($G_{ij} = 0$), so the permutation becomes a deterministic function of the input; the soft doubly-stochastic $P$ is used directly for the reordering. $P$ is never rounded to a hard permutation matrix, neither during training nor at inference.
+	At test time, Gumbel noise is suppressed ($G_{ij} = 0$), so the permutation becomes a deterministic function of the input; the soft doubly-stochastic $P$ is used directly for the reordering. $P$ is never rounded to a hard permutation matrix, neither during training nor at inference. The model is run at the temperature of the epoch whose checkpoint is used, not at $\tau_\infty$: the checkpoint was trained and selected at that temperature, and a lower one would produce a sharper $P$ than the model has ever seen. In our first implementation inference always used $\tau_\infty$, although training stops early and the selected epoch $e$ has $\tau = 0.95^{\,e-1}$, for example $0.63$ at epoch $10$.
 	
 	\subsubsection*{Dependence on the input numbering}
-	\textcolor{red}{The learned ordering does not make the fused representation independent of how the practitioner numbers the modalities. The query of row $i$ of $Z$ is computed from modality $i$, so renumbering the inputs by a permutation $\rho$ renumbers both the rows and the columns of $Z$ by $\rho$. Sinkhorn normalisation commutes with such a renumbering, so $P$, and with it the reordered sequence $\bigl(\tilde{u}_1, \dots, \tilde{u}_M\bigr)$, are renumbered by $\rho$ as well, and the inter-modal BiMamba receives the modalities in a different order. With one learned query vector per position instead of per modality, $Z_{ij} = p_i^\top k_j$, the reordered sequence would be exactly independent of the numbering, for the soft $P$ and at every temperature. This variant is not implemented.}
+	With one query per position, renumbering the streams by a permutation $\rho$ renumbers only the columns of $Z$: $Z' = Z R^\top$, where $R$ is the permutation matrix of $\rho$. Sinkhorn normalisation commutes with this, so $P' = P R^\top$, and the reordered sequence $\tilde{u}'_i = \sum_j P'_{ij} u'_j = \sum_j P_{ij} u_j = \tilde{u}_i$ is exactly the same, for the soft $P$ and at every temperature: the inter-modal BiMamba receives the same physical order of streams however they are numbered. Our first, stream-query formulation lacked this property. There the query of row $i$ was computed from stream $i$, so a renumbering renumbered the rows as well, $Z' = R Z R^\top$, and the reordered sequence came out renumbered by $\rho$.
 	
 	\section{Evaluation}
 
@@ -686,7 +686,41 @@
 
 	\subsection{Learned versus Fixed Modality Ordering}
 	\label{sec:fixedorder}
-	\textcolor{red}{\textbf{Planned; no results yet.} The ordering layer of Section \ref{sec:gumbel} is a contribution only if it does better than a fixed order. We will train the final configuration (core features plus text, mixed batches, full objective) with the meta-network removed and $P$ replaced by a constant permutation matrix, for four fixed orders of the $M = 10$ streams, with three seeds each ($95$, $1$, $2$), and compare each with the six seeds of the learned ordering by Welch's $t$-test, as in Section \ref{sec:features}. The four orders are: (i) role-blocked, the five streams of the expert followed by the five of the novice, feature types in alphabetical order (the order in which the code stacks the streams before $P$ is applied); (ii) role-interleaved, the expert and novice streams of each feature type next to each other; (iii) and (iv) two random orders, drawn once and kept fixed for all seeds. An order and its reverse are not both included: the forward and backward scans of the bidirectional block have the same structure and separately initialised parameters, so reversing the sequence only exchanges their roles. For the learned model we will also record $P$ on the validation windows, to report which orders it actually selects and how close $P$ comes to a permutation matrix.}
+	The ordering layer of Section \ref{sec:gumbel} is a contribution only if it does better than a fixed order. We trained the final configuration (core features plus text, mixed batches, full objective) with the meta-network removed and $P$ replaced by a constant permutation matrix, for four fixed orders of the $M = 10$ streams, with three seeds each ($95$, $1$, $2$), and compared each with the six seeds of the learned ordering by Welch's $t$-test, as in Section \ref{sec:features}. The four orders are: (i) role-blocked, the five streams of the expert followed by the five of the novice, feature types in alphabetical order (the order in which the code stacks the streams before $P$ is applied); (ii) role-interleaved, the expert and novice streams of each feature type next to each other; (iii) and (iv) two random orders, drawn once and kept fixed for all seeds. An order and its reverse are not both included: the forward and backward scans of the bidirectional block have the same structure and separately initialised parameters, so reversing the sequence only exchanges their roles.
+	
+	\begin{center}
+	\small
+	\begin{tabular}{lcccccc}
+		\toprule
+		& \multicolumn{3}{c}{\textbf{NoXi}} & \multicolumn{3}{c}{\textbf{NoXi+J}} \\
+		\textbf{Ordering} & \textbf{Mean $\pm$ sd} & $\Delta$ & $p$ & \textbf{Mean $\pm$ sd} & $\Delta$ & $p$ \\
+		\midrule
+		Learned (6 seeds) & $\mathbf{0.731 \pm 0.020}$ & -- & -- & $0.641 \pm 0.018$ & -- & -- \\
+		Role-blocked & $0.702 \pm 0.023$ & $-0.028$ & $0.15$ & $0.672 \pm 0.006$ & $+0.031$ & $0.007^{*}$ \\
+		Role-interleaved & $0.717 \pm 0.006$ & $-0.014$ & $0.17$ & $\mathbf{0.676 \pm 0.027}$ & $+0.036$ & $0.13$ \\
+		Random 1 & $0.710 \pm 0.008$ & $-0.021$ & $0.06$ & $0.647 \pm 0.014$ & $+0.006$ & $0.59$ \\
+		Random 2 & $0.718 \pm 0.016$ & $-0.013$ & $0.34$ & $0.667 \pm 0.007$ & $+0.027$ & $0.016^{*}$ \\
+		\midrule
+		All fixed (12 runs) & $0.712 \pm 0.014$ & $-0.019$ & $0.07$ & $0.666 \pm 0.018$ & $+0.025$ & $0.02^{*}$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+	{\footnotesize $\Delta$ and $p$ (Welch) are relative to the learned ordering. Bold marks the best mean in each column; $^{*}$ marks $p < 0.05$ before correction.}
+	
+	The learned ordering does not do better than a fixed order. On NoXi every fixed order scores somewhat lower ($-0.013$ to $-0.028$), but none of the differences is significant, and pooled over the four orders the gap is $-0.019$ ($p = 0.07$). On NoXi+J the picture is reversed: every fixed order scores \emph{higher}, by up to $0.036$, and pooled over the four orders by $0.025$ ($p = 0.02$). Two single comparisons reach $p < 0.05$, but after the Holm correction over the eight comparisons the smallest corrected value is $0.057$, so no single fixed order is shown to differ from the learned one. The four fixed orders differ from each other by about as much as seeds do, so on these data the choice of order matters little, and learning it brings no measurable gain; on NoXi+J it costs accuracy. The fixed models also lack the meta-network and the Gumbel noise, so we cannot separate the effect of the ordering from that of removing the noise.
+	
+	\textbf{What the learned $P$ looks like.} We read out $P$ on the validation windows for one learned model per corpus (seed $95$). It is far from a permutation: the largest entry of a row averages $0.73$ on both corpora, only $55\%$ (NoXi) and $49\%$ (NoXi+J) of rows have an entry above $0.9$, and rounding each row to its largest entry gives a valid permutation for only $0.4\%$ and $2.1\%$ of the windows ($1{,}006$ and $1{,}431$ distinct rounded orders). Moreover, the rows of the averaged $P$ do not sum to one but to between $0.6$ and $2.0$ on NoXi and between $0.86$ and $1.37$ on NoXi+J. With $n_{\text{iter}} = 10$, the final Sinkhorn pass normalises the columns, but the iteration has not converged, so the matrix is column-stochastic without being doubly stochastic: some positions receive the weight of about two streams, others of about half a stream. In practice the layer therefore acts as a learned, input-dependent soft mixing of streams into positions rather than as an ordering. Whether the unscaled scores of Section \ref{sec:gumbel} are the reason for the slow convergence we have not tested.
+	
+	\textbf{Four problems in the first implementation.} Inspecting the layer against its intended mathematics revealed four faults, two of which penalise only the learned ordering and therefore bias the comparison above against it.
+	\begin{enumerate}
+		\item \textbf{The heads saw a changing layout.} The fused slots were concatenated in scan order and read by one dense layer per role. Under an input-dependent $P$, which stream occupied which part of the heads' input changed from window to window, so the read-out weights could not specialise; with a fixed order the layout never changes. Corrected by mapping the slots back to stream order with $P^\top$ before the heads (Section \ref{sec:intermodal}).
+		\item \textbf{Inference ran at a different temperature.} The best checkpoint was selected at the temperature of its epoch, but inference always used $\tau_\infty = 0.1$, giving a sharper $P$ than the model was trained or selected with. Fixed orders do not depend on $\tau$. Corrected by storing the temperature of the selected epoch with the checkpoint and using it at inference (Section \ref{sec:gumbel}).
+		\item \textbf{Sinkhorn had not converged.} With $10$ iterations and unscaled scores, $P$ was column-stochastic but not doubly stochastic. Corrected by the $1/\sqrt{d_s}$ scaling and $50$ iterations.
+		\item \textbf{The score matrix had no notion of position.} With data-dependent queries, $Z_{ij}$ compared stream $i$ with stream $j$ rather than scoring stream $j$ for position $i$, and the result depended on how the streams were numbered. Corrected by one learned query per position.
+	\end{enumerate}
+	All other results in this document were obtained with the first implementation.
+
+	\textcolor{red}{\textbf{Pending.} The corrected layer is being trained with the same configuration and seeds ($95$, $1$, $2$) and will be compared with the four fixed orders above. The effect of the temperature correction alone is measured by re-scoring the six existing learned models per corpus at the temperature of their selected epoch, without retraining.}
 
 	\subsection{Cross-Corpus Transfer: a Shift in Label Scale}
 	The analyses of this and the next subsection were made with models trained on single-session batches and core features (Sections \ref{sec:batches} and \ref{sec:features}); we have not repeated them in the final setting, but nothing in them depends on those choices. A model trained on one corpus and evaluated on the other scores close to zero. The decomposition $\text{CCC} = \rho\,C_b$ of Section \ref{sec:ccc} shows where the loss arises:
@@ -807,7 +841,7 @@
 		\midrule
 		\multicolumn{3}{l}{\textit{Gumbel-Sinkhorn}} \\
 		$d_s$ & Query/key projection dimension & $64$ \\
-		$n_{\text{iter}}$ & Sinkhorn normalisation iterations & $10$ \\
+		$n_{\text{iter}}$ & Sinkhorn normalisation iterations & $10$; $50$ in the corrected layer (Section \ref{sec:fixedorder}) \\
 		$\tau_0$ & Initial temperature & $1.0$ \\
 		$\tau_\infty$ & Minimum temperature & $0.1$ \\
 		$\gamma$ & Temperature decay rate per epoch & $0.95$ \\

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import jax
+import json
 import jax.numpy as jnp
 import numpy as np
 import optax
@@ -219,6 +220,7 @@ def main() -> None:
                 best_val_ccc = v_ccc
                 epochs_without_improvement = 0
                 checkpointer.save(cnfg.checkpoint_dir / "best", {"params": state.params, "batch_stats": state.batch_stats}, force=True)
+                (cnfg.checkpoint_dir / "best_tau.json").write_text(json.dumps({"tau": tau, "epoch": epoch + 1}))  # inference reuses this temperature
                 log.info(f"  New best val CCC: {best_val_ccc:.4f}")
             else:
                 epochs_without_improvement += 1

@@ -30,15 +30,24 @@ class GumbelSinkhorn(nn.Module):
     M: int          # number of modalities
     d_key: int      # query/key projection dim
     n_iters: int    # Sinkhorn iterations
+    position_queries: bool = False  # rows of Z from one learned query per POSITION (Z_ij = p_i . k_j) instead of per stream
+    scale_scores: bool = False      # Z / sqrt(d_key), as in scaled dot-product attention
 
     # summaries: (B, M, C') ; tau: scalar temperature ; rng: PRNGKey or None -> P: (B, M, M) doubly-stochastic
     @nn.compact
     def __call__(self, summaries: jax.Array, *, tau: float = 1.0, rng: jax.Array | None = None) -> jax.Array:
-        Q = nn.Dense(self.d_key, use_bias=False, name="query")(summaries)  # (B, M, d_key)
         K = nn.Dense(self.d_key, use_bias=False, name="key")(summaries)    # (B, M, d_key)
+        if self.position_queries:
+            pos = self.param("position_queries", nn.initializers.normal(stddev=1.0), (self.M, self.d_key))  # (M, d_key)
+            Q = jnp.broadcast_to(pos, K.shape)  # (B, M, d_key): row i scores how well each stream fits position i
+        else:
+            Q = nn.Dense(self.d_key, use_bias=False, name="query")(summaries)  # (B, M, d_key): row i belongs to stream i
 
         # Score matrix: entry (i,j) = fitness of placing modality j at position i
         Z = jnp.matmul(Q, K.transpose(0, 2, 1))  # (B, M, M)
+        if self.scale_scores:
+            Z = Z / jnp.sqrt(jnp.asarray(self.d_key, Z.dtype))
+        self.sow("intermediates", "Z", Z)  # score magnitudes, for diagnostics only
 
         # Gumbel perturbation for stochastic exploration during training
         if rng is not None:
@@ -81,6 +90,9 @@ class InterModalBiMamba(nn.Module):
     GS_dim: int = 64         # Gumbel-Sinkhorn projection dim
     n_iters: int = 10       # Sinkhorn iterations
     fixed_order: str | None = None  # None = learned (Gumbel-Sinkhorn); else a name from FIXED_ORDERS -> constant P, no meta-network
+    position_queries: bool = False
+    scale_scores: bool = False
+    unsort: bool = False            # map fused slots back to stream order with P^T, so the heads see a fixed layout
     dt_min: float = 1e-3
     dt_max: float = 1e-1
 
@@ -95,7 +107,7 @@ class InterModalBiMamba(nn.Module):
         summaries = stacked.mean(axis=2)  # Temporal mean-pool each modality -> summaries (B, M, C')
 
         if self.fixed_order is None:
-            gs = GumbelSinkhorn(M=M, d_key=self.GS_dim, n_iters=self.n_iters, name="gumbel_sinkhorn")
+            gs = GumbelSinkhorn(M=M, d_key=self.GS_dim, n_iters=self.n_iters, position_queries=self.position_queries, scale_scores=self.scale_scores, name="gumbel_sinkhorn")
             P = gs(summaries, tau=tau, rng=rng)  # (B, M, M)
         else:
             P_fixed = jnp.asarray(permutation_matrix(fixed_permutation(keys, self.fixed_order)))  # (M, M)
@@ -111,6 +123,11 @@ class InterModalBiMamba(nn.Module):
         block = BiMambaBlock(D=self.D, N=self.N, D_C=self.D_C, dt_min=self.dt_min, dt_max=self.dt_max, name="cross_modal_bimamba")
         
         fused = block(seq, train=train)  # (B * L', M, C')
+
+        if self.unsort:
+            # Slot i holds sum_j P_ij u_j; stream j gets back sum_i P_ij slot_i (= P^T, the inverse of a permutation),
+            # so the heads always read the streams in the same layout whatever order the scan used
+            fused = jnp.einsum("bij,blic->bljc", P, fused.reshape(B, Lp, M, Cp)).reshape(B * Lp, M, Cp)
 
         H = fused.reshape(B, Lp, M * Cp)  # (B, L', MC')
 

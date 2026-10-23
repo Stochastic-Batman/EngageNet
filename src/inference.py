@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -40,6 +41,17 @@ def find_latest_checkpoint(checkpoint_dir: Path) -> Path:
     return ckpts[-1]
 
 
+# Temperature the model is run at: --infer-tau, else the tau of the epoch the best checkpoint came from, else tau_min.
+# Before best_tau.json existed every model was run at tau_min, although it was trained and selected at a higher tau.
+def resolve_tau(cnfg: EngageNetConfig) -> float:
+    if cnfg.infer_tau is not None:
+        return cnfg.infer_tau
+    f = cnfg.checkpoint_dir / "best_tau.json"
+    if f.exists():
+        return float(json.loads(f.read_text())["tau"])
+    return cnfg.tau_min
+
+
 # Fewer windows than this and batch quantiles are meaningless, so the last short batch is never adapted on
 TTA_MIN_BATCH = 4
 
@@ -58,29 +70,30 @@ def _stack(windows: list[dict]) -> dict[str, jax.Array]:
 
 
 # tta_state: None -> plain inference with `state`; otherwise a fresh TTA state (reset per session by the caller)
-def run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, tta_state: TrainState | None = None) -> tuple[dict[str, np.ndarray], dict[str, int]]:
+def run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, tta_state: TrainState | None = None, tau: float | None = None) -> tuple[dict[str, np.ndarray], dict[str, int]]:
     ds = EngageNetDataset(cnfg, split=None, session_dirs=[session_dir])
 
     window_preds: dict[str, list[np.ndarray]] = {role: [] for role in ROLES}
     window_starts: list[int] = []
     stats = {"windows": 0, "selected": 0, "steps": 0}
     st = tta_state
+    tau = cnfg.tau_min if tau is None else tau
 
     def flush(buf: list[dict]) -> None:
         nonlocal st
         inputs = _stack(buf)
 
         if st is not None and len(buf) >= TTA_MIN_BATCH:
-            multimodal, unimodal = predict_batch(st, inputs, cnfg.tau_min)
+            multimodal, unimodal = predict_batch(st, inputs, tau)
             mask = select_windows(window_uncertainty(multimodal), window_uncertainty(unimodal), multi_pct=cnfg.tta_multi_pct, uni_pct=cnfg.tta_uni_pct)
             n_sel = int(mask.sum())
             if n_sel > 0:
-                st, _loss = tta_step(st, inputs, mask, cnfg.tau_min, lam=cnfg.tta_lambda)
+                st, _loss = tta_step(st, inputs, mask, tau, lam=cnfg.tta_lambda)
                 stats["selected"] += n_sel
                 stats["steps"] += 1
 
         # Predictions always come from AFTER the update, in eval mode
-        multimodal, _ = predict_batch(st if st is not None else state, inputs, cnfg.tau_min)
+        multimodal, _ = predict_batch(st if st is not None else state, inputs, tau)
         for role in ROLES:
             a, b = multimodal[role]
             means = np.asarray(predictive_mean(a, b))  # (B, L')
@@ -126,6 +139,9 @@ def main():
     restored = checkpointer.restore(ckpt_path, {"params": state.params, "batch_stats": state.batch_stats})
     state = state.replace(params=restored["params"], batch_stats=restored["batch_stats"])
 
+    tau = resolve_tau(cnfg)
+    log.info(f"Inference temperature tau = {tau:.4f}")
+
     tta_template = None
     if cnfg.tta:
         n_adapt = count_adapted(state.params)
@@ -154,7 +170,7 @@ def main():
 
         for session_dir in session_dirs:
             # tta_template is immutable, so passing it again resets params and optimizer state for every session
-            preds, stats = run_session(session_dir, state, sub_cnfg, tta_template)
+            preds, stats = run_session(session_dir, state, sub_cnfg, tta_template, tau)
 
             out_dir = cnfg.submission_dir / corpus_name / split / session_dir.name
             out_dir.mkdir(parents=True, exist_ok=True)

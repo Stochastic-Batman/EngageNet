@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import sys
 
 from pathlib import Path
@@ -83,6 +84,31 @@ def main() -> None:
         log.info(f"fixed order {name}: {[keys[j] for j in perm]}")
     interleaved = fixed_permutation(keys, "interleaved")
     assert [keys[j].split(".", 1)[1] for j in interleaved[:2]] == [keys[0].split(".", 1)[1]] * 2, "interleaved should pair roles"
+
+    # Corrected layer: position queries + scaled scores + 50 Sinkhorn iterations + unsort
+    fixed_model = InterModalBiMamba(D=Cp, N=16, D_C=4, GS_dim=64, n_iters=50, position_queries=True, scale_scores=True, unsort=True)
+    cv = fixed_model.init(rng_init, hiddens, tau=1.0, rng=rng_gumbel, train=False)
+    assert "position_queries" in cv["params"]["gumbel_sinkhorn"] and "query" not in cv["params"]["gumbel_sinkhorn"], "position queries not used"
+    Hc, inter = fixed_model.apply(cv, hiddens, tau=0.3, rng=None, train=False, mutable=["batch_stats", "intermediates"])
+    Pc = inter["intermediates"]["P"][0]
+    log.info(f"corrected P: row-sum error {jnp.abs(Pc.sum(-1) - 1).max():.2e}, column-sum error {jnp.abs(Pc.sum(-2) - 1).max():.2e}")
+    assert jnp.abs(Pc.sum(-1) - 1).max() < 1e-3 and jnp.abs(Pc.sum(-2) - 1).max() < 1e-3, "corrected P not doubly stochastic"
+    assert Hc.shape == (B, Lp, D)
+
+    # Position queries: renumbering the streams only renumbers the COLUMNS of P (P' = P R^T), so the slot contents are unchanged
+    gs_pos = GumbelSinkhorn(M=M, d_key=64, n_iters=50, position_queries=True, scale_scores=True)
+    gv = gs_pos.init(rng_init, summaries, tau=1.0)
+    rho = jnp.array([3, 0, 7, 1, 6, 2, 5, 4])
+    P1 = gs_pos.apply(gv, summaries, tau=0.5)
+    P2 = gs_pos.apply(gv, summaries[:, rho], tau=0.5)
+    assert jnp.allclose(P2, P1[:, :, rho], atol=1e-5), "position-query P does not follow the renumbering"
+    assert jnp.allclose(jnp.einsum("bij,bjc->bic", P2, summaries[:, rho]), jnp.einsum("bij,bjc->bic", P1, summaries), atol=1e-4), "slot contents depend on numbering"
+
+    # Unsort with a hard permutation returns every stream to its own slot: P^T (P u) = u
+    perm = fixed_permutation(keys, "rand0")
+    Ph = jnp.asarray(np.eye(M, dtype=np.float32)[perm])  # row i = one-hot of perm[i]
+    u = jax.random.normal(rng_data, (M, Cp))
+    assert jnp.allclose(Ph.T @ (Ph @ u), u), "P^T is not the inverse of P"
 
     log.info("All checks passed!")
 

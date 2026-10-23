@@ -100,6 +100,10 @@ class EngageNetConfig:
     gs_dim: int = 64               # query/key projection dim for score matrix
     gs_iters: int = 20             # Sinkhorn normalisation iterations
     fixed_order: Optional[str] = None  # None = learned ordering; else blocked | interleaved | rand0 | rand1 (constant P)
+    position_queries: bool = False # score rows from one learned query per position instead of per stream
+    scale_scores: bool = False     # divide the score matrix by sqrt(gs_dim)
+    unsort: bool = False           # map the fused slots back to stream order (P^T) before the heads
+    infer_tau: Optional[float] = None  # temperature at inference; None = best_tau.json of the checkpoint, else tau_min
 
     # Beta head
     beta_hidden: int = 128         # hidden layer width in BetaHead
@@ -174,6 +178,10 @@ class EngageNetConfig:
         parser.add_argument("--gs-dim", type=int, default=64)
         parser.add_argument("--gs-iters", type=int, default=10)
         parser.add_argument("--fixed-order", type=str, default=None, choices=["blocked", "interleaved", "rand0", "rand1"])
+        parser.add_argument("--position-queries", action="store_true")
+        parser.add_argument("--scale-scores", action="store_true")
+        parser.add_argument("--unsort", action="store_true")
+        parser.add_argument("--infer-tau", type=float, default=None)
         parser.add_argument("--beta-hidden", type=int, default=128)
         parser.add_argument("--checkpoint-dir", type=str, default=None)
         parser.add_argument("--lambda-ccc", type=float, default=1.0)
@@ -219,6 +227,10 @@ class EngageNetConfig:
             gs_dim=args.gs_dim,
             gs_iters=args.gs_iters,
             fixed_order=args.fixed_order,
+            position_queries=args.position_queries,
+            scale_scores=args.scale_scores,
+            unsort=args.unsort,
+            infer_tau=args.infer_tau,
             beta_hidden=args.beta_hidden,
             checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else cls.checkpoint_dir,
             lambda_ccc=args.lambda_ccc,

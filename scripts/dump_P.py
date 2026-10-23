@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from config import EngageNetConfig
 from data_loader import iter_batches
-from inference import find_latest_checkpoint
+from inference import find_latest_checkpoint, resolve_tau
 from train import _drop_meta, create_train_state
 from read_data import log
 
@@ -38,23 +38,33 @@ def main() -> None:
     restored = ocp.StandardCheckpointer().restore(ckpt, {"params": state.params, "batch_stats": state.batch_stats})
     variables = {"params": restored["params"], "batch_stats": restored["batch_stats"]}
 
+    tau = resolve_tau(cnfg)
+
     @jax.jit
     def get_P(inputs):
-        _, inter = state.apply_fn(variables, inputs, tau=cnfg.tau_min, rng=None, train=False, mutable=["batch_stats", "intermediates"])
-        return inter["intermediates"]["inter_modal"]["P"][0]  # (B, M, M)
+        _, inter = state.apply_fn(variables, inputs, tau=tau, rng=None, train=False, mutable=["batch_stats", "intermediates"])
+        im = inter["intermediates"]["inter_modal"]
+        return im["P"][0], im["gumbel_sinkhorn"]["Z"][0]  # (B, M, M) each
 
-    Ps = []
+    Ps, Zs = [], []
     for batch in iter_batches(cnfg, split="val"):
         inputs = {k: v for k, v in _drop_meta(batch).items() if not (k.endswith(".engagement") or k.endswith(".gender"))}
-        Ps.append(np.asarray(get_P(inputs)))
+        P_b, Z_b = get_P(inputs)
+        Ps.append(np.asarray(P_b))
+        Zs.append(np.asarray(Z_b))
     P = np.concatenate(Ps, axis=0)  # (N, M, M)
+    Z = np.concatenate(Zs, axis=0)  # (N, M, M), before the temperature
     keys = sorted(f"{r}.{f}" for f in cnfg.modality_names for r in ("expert", "novice"))
     short = [k.replace("expert.", "E.").replace("novice.", "N.").replace("audio.", "").replace("_embeddings", "") for k in keys]
 
     np.set_printoptions(precision=2, suppress=True, linewidth=200)
-    log.info(f"checkpoint {ckpt}  windows {P.shape[0]}  tau {cnfg.tau_min}")
+    log.info(f"checkpoint {ckpt}  windows {P.shape[0]}  tau {tau:.4f}")
     log.info("streams (columns): " + "  ".join(f"{j}={s}" for j, s in enumerate(short)))
     log.info("mean P (rows = positions):\n" + str(P.mean(axis=0)))
+    spread = Z.max(axis=-1) - Z.min(axis=-1)
+    log.info(f"|Z| median {np.median(np.abs(Z)):.3g}, 99th pct {np.percentile(np.abs(Z), 99):.3g}; per-row spread of Z/tau median {np.median(spread) / tau:.3g}")
+    rows, cols = P.sum(axis=-1), P.sum(axis=-2)
+    log.info(f"row sums: min {rows.min():.3f} max {rows.max():.3f}; column sums: min {cols.min():.3f} max {cols.max():.3f} (doubly stochastic = all 1)")
     row_max = P.max(axis=-1)
     log.info(f"sharpness: mean row max {row_max.mean():.3f}, rows with max > 0.9: {(row_max > 0.9).mean():.1%}")
 
