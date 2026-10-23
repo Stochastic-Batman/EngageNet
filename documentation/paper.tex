@@ -752,12 +752,53 @@
 	$$y_i = C_i^\top\bigl(h_i^{\rightarrow} + h_i^{\leftarrow}\bigr) = C_i^\top\Bigl(\sum_{j=1}^{M} \bar{B}_j x_j + \bar{B}_i x_i\Bigr),$$
 	which depends only on stream $i$ itself and on the sum over all streams. Renumbering the positions renumbers the outputs in the same way and changes nothing else: the scan is permutation-equivariant, and after unsorting, its output does not depend on the order at all. Our block departs from this case in three places: $\bar{A} = \exp(\Delta A) < 1$, a depthwise convolution of width $4$ over neighbouring positions, and separate forward and backward parameters. Order can only matter through these, and how much it does is an empirical question, which the following tests answer.
 
-	\textcolor{red}{\textbf{Planned: testing that the order does not matter.} A non-significant difference is not evidence that there is none, so the claim is tested as an equivalence, with the margin fixed in advance at $\delta = 0.02$ CCC (about one seed standard deviation; smaller differences are of no practical consequence). Equivalence within $\pm\delta$ is shown by two one-sided tests (TOST) at $\alpha = 0.05$, i.e.\ when the $90\%$ confidence interval of the difference lies inside $(-\delta, \delta)$; for every comparison we also report the smallest margin the data establish.}
-	\begin{itemize}
-		\item \textcolor{red}{\emph{Training-time order.} Three more seeds ($3$, $4$, $5$) for each fixed order on both corpora, six per order in all. One-way ANOVA with variance components (seed and order standard deviation, with an upper confidence bound on the latter), and for each order a Welch TOST against the runs of the other three orders.}
-		\item \textcolor{red}{\emph{Inference-time order.} Every trained fixed-order model is run, without retraining, with the scan in six other orders (the three other fixed orders and three further random orders); the outputs are mapped back to the layout the heads were trained on, so only the scan order changes. The difference $\Delta$ to the same model in its own order is paired, so seed variance drops out. The unit of analysis is the trained model ($\Delta$ averaged over its probes, $12$ models per corpus), tested with a one-sample TOST.}
-		\item \textcolor{red}{\emph{Mechanism.} The distribution of $\bar{A}$ in the trained inter-modal block on the validation windows, and the share $\bar{A}^{\,M-1}$ of the state that survives the whole sequence of streams, in each direction.}
-	\end{itemize}
+	\textbf{Testing that the order does not matter.} A non-significant difference is not evidence that there is none, so the claim is tested as an equivalence, with the margin fixed in advance at $\delta = 0.02$ CCC (about one seed standard deviation; smaller differences are of no practical consequence). Equivalence within $\pm\delta$ is shown by two one-sided tests (TOST) at $\alpha = 0.05$, i.e.\ when the $90\%$ confidence interval of the difference lies inside $(-\delta, \delta)$; for every comparison we also report the smallest margin the data establish, the largest absolute end of that interval.
+
+	\emph{Training-time order.} We trained three more seeds ($3$, $4$, $5$) for each fixed order on both corpora, six per order in all. Each order is compared by Welch's TOST with the runs of the other three orders:
+
+	\begin{center}
+	\small\setlength{\tabcolsep}{4pt}
+	\begin{tabular}{lcccccc}
+		\toprule
+		& \multicolumn{3}{c}{\textbf{NoXi}} & \multicolumn{3}{c}{\textbf{NoXi+J}} \\
+		\textbf{Order} & \textbf{Mean $\pm$ sd} & \textbf{$90\%$ CI of $\Delta$} & $p_{\text{TOST}}$ & \textbf{Mean $\pm$ sd} & \textbf{$90\%$ CI of $\Delta$} & $p_{\text{TOST}}$ \\
+		\midrule
+		Role-blocked & $0.713 \pm 0.019$ & $[-0.018, +0.013]$ & $\mathbf{0.035}$ & $0.670 \pm 0.019$ & $[-0.008, +0.025]$ & $0.11$ \\
+		Role-interleaved & $0.719 \pm 0.008$ & $[-0.002, +0.014]$ & $\mathbf{0.005}$ & $0.663 \pm 0.028$ & $[-0.024, +0.022]$ & $0.08$ \\
+		Random 1 & $0.711 \pm 0.008$ & $[-0.013, +0.003]$ & $\mathbf{0.002}$ & $0.657 \pm 0.017$ & $[-0.023, +0.007]$ & $0.09$ \\
+		Random 2 & $0.716 \pm 0.012$ & $[-0.009, +0.012]$ & $\mathbf{0.005}$ & $0.664 \pm 0.007$ & $[-0.009, +0.010]$ & $\mathbf{0.001}$ \\
+		\midrule
+		ANOVA & \multicolumn{3}{c}{$F = 0.47$, $p = 0.71$} & \multicolumn{3}{c}{$F = 0.43$, $p = 0.74$} \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+	{\footnotesize $\Delta$ is the order minus the pooled runs of the other three orders. Bold marks equivalence within $\pm 0.02$ ($p_{\text{TOST}} < 0.05$).}
+
+	A one-way ANOVA finds no effect of the order on either corpus. Splitting the variance into a seed and an order component, the seed standard deviation is $0.013$ (NoXi) and $0.019$ (NoXi+J), the estimated order standard deviation is $0$ on both, and its approximate $95\%$ upper bound is $0.009$ and $0.013$: the order contributes less spread than the seed does. With six seeds the order means span only $0.008$ and $0.012$, against $0.016$ and $0.030$ with three, so most of the earlier spread was seed noise. On NoXi all four orders are equivalent to the rest within $\pm 0.02$; since the joint claim requires every one of the four tests to pass, no multiplicity correction is needed (intersection-union principle). On NoXi+J only random order 2 passes: the other intervals reach $0.022$ to $0.025$, so with a seed standard deviation of $0.019$ six seeds exclude only differences above about $0.025$.
+
+	\emph{Inference-time order.} Each of the $12$ fixed-order models per corpus (four orders, seeds $95$, $1$, $2$) was run, without retraining, with the scan in six other orders (the three other fixed orders and three further random orders). The outputs are mapped back to the layout the heads were trained on, so only the scan order changes. The difference $\Delta = \text{CCC}(\text{other order}) - \text{CCC}(\text{own order})$ is paired, so seed variance drops out. The unit of analysis is the trained model, with $\Delta$ averaged over its six probes:
+
+	\begin{center}
+	\small
+	\begin{tabular}{lcc}
+		\toprule
+		& \textbf{NoXi} & \textbf{NoXi+J} \\
+		\midrule
+		Mean $\Delta$ per model ($12$ models) & $+0.0004$ & $-0.0074$ \\
+		$90\%$ CI & $[-0.0033, +0.0042]$ & $[-0.0125, -0.0022]$ \\
+		$p_{\text{TOST}}$ ($\pm 0.02$) & $< 0.0001$ & $0.0005$ \\
+		Excluded beyond & $0.004$ & $0.013$ \\
+		Mean $|\Delta|$ over the $72$ probes & $0.006$ & $0.009$ \\
+		Worst single probe & $-0.022$ & $-0.044$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+
+	Equivalence within $\pm 0.02$ holds clearly on both corpora; on NoXi the data exclude any effect larger than $0.004$. On NoXi+J the models score slightly lower in an order they were not trained with ($-0.007$; $t$-test against zero $p = 0.03$, $10$ of $12$ models lower): the block has adapted a little to its training order, but a foreign order costs less than $0.013$ on average and at most $0.044$ for a single probe.
+
+	\emph{Mechanism.} We read out $\bar{A}$ in the inter-modal block on the validation windows for the eight seed-$95$ models (four orders, two corpora). In both directions, $43\%$ to $56\%$ of the entries exceed $0.9$, the median is $0.90$ to $0.95$, and only $1\%$ to $6\%$ are below $0.1$. The mean share of the state that survives the whole sequence of streams, $\bar{A}^{\,M-1}$, is $0.36$ to $0.48$. The trained block therefore operates close to the no-decay case of the proposition above: most state channels carry each stream across the whole sequence with little loss, so every position sees nearly the same summary of all streams whatever their order. Order can enter only through the minority of fast-decaying channels and the width-$4$ convolution, which matches the small effects measured above.
+
+	\textbf{Conclusion.} The scan order of the inter-modal block does not matter within $\pm 0.02$ CCC. At inference this is established on both corpora. At training it is established on NoXi for each of the four orders; on NoXi+J the order explains no measurable variance, but the per-order tests exclude only differences above about $0.025$. The trained block decays slowly enough to be nearly order-equivariant, so a learned ordering has nothing to exploit, which explains why neither version of the layer did better than a fixed order.
 
 	\subsection{Cross-Corpus Transfer: a Shift in Label Scale}
 	The analyses of this and the next subsection were made with models trained on single-session batches and core features (Sections \ref{sec:batches} and \ref{sec:features}); we have not repeated them in the final setting, but nothing in them depends on those choices. A model trained on one corpus and evaluated on the other scores close to zero. The decomposition $\text{CCC} = \rho\,C_b$ of Section \ref{sec:ccc} shows where the loss arises:
