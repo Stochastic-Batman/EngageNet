@@ -110,6 +110,27 @@ def main() -> None:
     u = jax.random.normal(rng_data, (M, Cp))
     assert jnp.allclose(Ph.T @ (Ph @ u), u), "P^T is not the inverse of P"
 
+    # Probe order: scanning in the trained order changes nothing; another order changes the output but keeps its shape
+    fo = InterModalBiMamba(D=Cp, N=16, D_C=4, GS_dim=64, n_iters=10, fixed_order="rand0")
+    fv = fo.init(rng_init, hiddens, tau=1.0, rng=None, train=False)
+    H_own = fo.apply(fv, hiddens, tau=1.0, rng=None, train=False)
+    H_same = InterModalBiMamba(D=Cp, N=16, D_C=4, GS_dim=64, n_iters=10, fixed_order="rand0", probe_order="rand0").apply(fv, hiddens, tau=1.0, rng=None, train=False)
+    H_other = InterModalBiMamba(D=Cp, N=16, D_C=4, GS_dim=64, n_iters=10, fixed_order="rand0", probe_order="blocked").apply(fv, hiddens, tau=1.0, rng=None, train=False)
+    assert jnp.allclose(H_own, H_same, atol=1e-5), "probing the trained order changed the output"
+    assert H_other.shape == H_own.shape and not jnp.allclose(H_own, H_other, atol=1e-4), "probe order had no effect"
+
+    # A block with no state decay (A_bar = 1), no convolution and SHARED forward/backward parameters is order-equivariant:
+    # forward prefix sum + backward suffix sum = total + own term, whatever the order. Checked on the raw scan.
+    from ssm import ssm
+    xs = jax.random.normal(rng_data, (1, M, 3))
+    d = jnp.ones((1, M, 3)) * 0.5
+    A0 = -jnp.full((3, 4), 1e-9)  # A_bar = exp(delta * A) ~ 1
+    Bm = jax.random.normal(rng_init, (1, M, 4)); Cm = jax.random.normal(rng_gumbel, (1, M, 4))
+    def bi(x, b, c):
+        return ssm(x, d, A0, b, c) + jnp.flip(ssm(jnp.flip(x, 1), d, A0, jnp.flip(b, 1), jnp.flip(c, 1)), 1)
+    perm = jnp.array(fixed_permutation(keys, "rand1"))
+    assert jnp.allclose(bi(xs, Bm, Cm)[:, perm], bi(xs[:, perm], Bm[:, perm], Cm[:, perm]), atol=1e-4), "no-decay shared scan is not order-equivariant"
+
     log.info("All checks passed!")
 
 

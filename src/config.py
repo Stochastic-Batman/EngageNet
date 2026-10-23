@@ -103,6 +103,7 @@ class EngageNetConfig:
     position_queries: bool = False # score rows from one learned query per position instead of per stream
     scale_scores: bool = False     # divide the score matrix by sqrt(gs_dim)
     unsort: bool = False           # map the fused slots back to stream order (P^T) before the heads
+    probe_order: Optional[str] = None  # inference only, fixed-order models: scan in this order (blocked | interleaved | rand<k>)
     infer_tau: Optional[float] = None  # temperature at inference; None = best_tau.json of the checkpoint, else tau_min
 
     # Beta head
@@ -181,6 +182,7 @@ class EngageNetConfig:
         parser.add_argument("--position-queries", action="store_true")
         parser.add_argument("--scale-scores", action="store_true")
         parser.add_argument("--unsort", action="store_true")
+        parser.add_argument("--probe-order", type=str, default=None)
         parser.add_argument("--infer-tau", type=float, default=None)
         parser.add_argument("--beta-hidden", type=int, default=128)
         parser.add_argument("--checkpoint-dir", type=str, default=None)
@@ -230,6 +232,7 @@ class EngageNetConfig:
             position_queries=args.position_queries,
             scale_scores=args.scale_scores,
             unsort=args.unsort,
+            probe_order=args.probe_order,
             infer_tau=args.infer_tau,
             beta_hidden=args.beta_hidden,
             checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else cls.checkpoint_dir,

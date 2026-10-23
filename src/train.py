@@ -175,6 +175,8 @@ def create_train_state(cnfg: EngageNetConfig, rng: jax.Array) -> TrainState:
 
 def main() -> None:
     cnfg = EngageNetConfig.from_cli()
+    if cnfg.probe_order is not None:
+        raise SystemExit("--probe-order is for inference only")
 
     rng = jax.random.PRNGKey(cnfg.seed)
     rng, rng_init = jax.random.split(rng)

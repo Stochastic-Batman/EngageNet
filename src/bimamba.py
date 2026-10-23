@@ -43,6 +43,7 @@ class BiMambaBlock(nn.Module):
     pre_norm: bool = True  # LayerNorm on the residual stream
     dt_min: float = 1e-3  # smallest delta at init -> longest receptive field
     dt_max: float = 1e-1  # largest delta at init -> shortest receptive field
+    record_decay: bool = False  # sow statistics of A_bar = exp(delta*A) (diagnostics, read with mutable=["intermediates"])
 
     # h: (B, L', D) -> (B, L', D)
     @nn.compact
@@ -67,6 +68,13 @@ class BiMambaBlock(nn.Module):
         B_bwd = nn.Dense(N, use_bias=False)(x_bwd)  # (B, L', N)
         C_bwd = nn.Dense(N, use_bias=False)(x_bwd)  # (B, L', N)
         h_bwd = g * jnp.flip(ssm(x_bwd, delta_bwd, A_bwd, B_bwd, C_bwd), axis=1)  # (B, L', D)
+
+        if self.record_decay:
+            L = h.shape[1]
+            for name, delta, A in (("fwd", delta_fwd, A_fwd), ("bwd", delta_bwd, A_bwd)):
+                a_bar = jnp.exp(delta[..., None] * A)  # (B, L', D, N): fraction of the state kept per step
+                self.sow("intermediates", f"abar_hist_{name}", jnp.histogram(a_bar, bins=20, range=(0.0, 1.0))[0])
+                self.sow("intermediates", f"abar_reach_{name}", jnp.mean(a_bar ** (L - 1)))  # share kept over the whole sequence
 
         u = h + nn.Dense(D)((h_fwd + h_bwd) / 2)  # (B, L', D)
 

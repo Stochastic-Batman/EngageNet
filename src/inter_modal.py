@@ -70,9 +70,9 @@ def fixed_permutation(keys: list[str], name: str) -> np.ndarray:
         feats = sorted({k.split(".", 1)[1] for k in keys})
         roles = sorted({k.split(".", 1)[0] for k in keys})
         return np.array([keys.index(f"{r}.{f}") for f in feats for r in roles if f"{r}.{f}" in keys])
-    if name in ("rand0", "rand1"):  # drawn once from a fixed seed, independent of the training seed
-        return np.random.default_rng(int(name[-1])).permutation(M)
-    raise ValueError(f"unknown fixed order {name!r}; expected one of {FIXED_ORDERS}")
+    if name.startswith("rand") and name[4:].isdigit():  # rand<k>: drawn once from seed k, independent of the training seed
+        return np.random.default_rng(int(name[4:])).permutation(M)
+    raise ValueError(f"unknown fixed order {name!r}; expected one of {FIXED_ORDERS} or rand<k>")
 
 
 # perm: (M,) -> P: (M, M) permutation matrix with P[i, perm[i]] = 1
@@ -93,6 +93,7 @@ class InterModalBiMamba(nn.Module):
     position_queries: bool = False
     scale_scores: bool = False
     unsort: bool = False            # map fused slots back to stream order with P^T, so the heads see a fixed layout
+    probe_order: str | None = None  # inference-only probe of a fixed-order model: scan in this order, then map back to the trained layout
     dt_min: float = 1e-3
     dt_max: float = 1e-1
 
@@ -114,20 +115,32 @@ class InterModalBiMamba(nn.Module):
             P = jnp.broadcast_to(P_fixed, (B, M, M)).astype(stacked.dtype)  # (B, M, M)
         self.sow("intermediates", "P", P)  # read out with mutable=["intermediates"]; a no-op otherwise
 
-        reordered = jnp.einsum("bij,bjlc->bilc", P, stacked)  # reordered[b,i] = sum_j P[b,i,j] * stacked[b,j] -> (B, M, L', C')
+        P_scan = P
+        if self.probe_order is not None:
+            if self.fixed_order is None:
+                raise ValueError("probe_order needs a fixed-order model (fixed_order set)")
+            P_scan = jnp.broadcast_to(jnp.asarray(permutation_matrix(fixed_permutation(keys, self.probe_order))), (B, M, M)).astype(stacked.dtype)
+
+        reordered = jnp.einsum("bij,bjlc->bilc", P_scan, stacked)  # reordered[b,i] = sum_j P[b,i,j] * stacked[b,j] -> (B, M, L', C')
 
         # Fuse along the MODALITY axis: sequence length M, feature width C'.
         # Folding time into the batch applies the same block, with shared weights, at every step.
         seq = reordered.transpose(0, 2, 1, 3).reshape(B * Lp, M, Cp)  # (B * L', M, C')
 
-        block = BiMambaBlock(D=self.D, N=self.N, D_C=self.D_C, dt_min=self.dt_min, dt_max=self.dt_max, name="cross_modal_bimamba")
+        block = BiMambaBlock(D=self.D, N=self.N, D_C=self.D_C, dt_min=self.dt_min, dt_max=self.dt_max, record_decay=True, name="cross_modal_bimamba")
         
         fused = block(seq, train=train)  # (B * L', M, C')
+
+        if self.probe_order is not None and not self.unsort:
+            # Slot i of the probe scan holds stream probe[i]; the heads were trained on slot k = stream trained[k].
+            # P P_scan^T maps probe slots back to the trained layout, so only the scan order differs.
+            fused = jnp.einsum("bik,bkj,bljc->blic", P, P_scan.transpose(0, 2, 1), fused.reshape(B, Lp, M, Cp)).reshape(B * Lp, M, Cp)
+            P_scan = P  # nothing left to unsort
 
         if self.unsort:
             # Slot i holds sum_j P_ij u_j; stream j gets back sum_i P_ij slot_i (= P^T, the inverse of a permutation),
             # so the heads always read the streams in the same layout whatever order the scan used
-            fused = jnp.einsum("bij,blic->bljc", P, fused.reshape(B, Lp, M, Cp)).reshape(B * Lp, M, Cp)
+            fused = jnp.einsum("bij,blic->bljc", P_scan, fused.reshape(B, Lp, M, Cp)).reshape(B * Lp, M, Cp)
 
         H = fused.reshape(B, Lp, M * Cp)  # (B, L', MC')
 

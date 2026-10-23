@@ -720,7 +720,44 @@
 	\end{enumerate}
 	All other results in this document were obtained with the first implementation.
 
-	\textcolor{red}{\textbf{Pending.} The corrected layer is being trained with the same configuration and seeds ($95$, $1$, $2$) and will be compared with the four fixed orders above. The effect of the temperature correction alone is measured by re-scoring the six existing learned models per corpus at the temperature of their selected epoch, without retraining.}
+	\textbf{Effect of the inference temperature alone.} Re-scoring the six existing learned models per corpus at the temperature of their selected epoch ($0.29$ to $0.49$ on NoXi, $0.36$ to $0.95$ on NoXi+J) instead of $\tau_\infty = 0.1$, without retraining, changes the validation CCC by $-0.001$ on NoXi ($0.729 \pm 0.022$; paired $t$-test over the same models, $p = 0.15$) and by $+0.005$ on NoXi+J ($0.645 \pm 0.017$; $p = 0.03$, all six seeds improve). The effect is real on NoXi+J but an order of magnitude smaller than the gap to the fixed orders.
+
+	\textbf{Corrected layer.} With all four corrections (position queries, scaled scores, $n_{\text{iter}} = 50$, unsorting before the heads, inference at the selected temperature), trained with the same configuration and seeds ($95$, $1$, $2$):
+	
+	\begin{center}
+	\small
+	\begin{tabular}{lcccccc}
+		\toprule
+		& \multicolumn{3}{c}{\textbf{NoXi}} & \multicolumn{3}{c}{\textbf{NoXi+J}} \\
+		\textbf{Compared with} & \textbf{Other} & $\Delta$ & $p$ & \textbf{Other} & $\Delta$ & $p$ \\
+		\midrule
+		Role-blocked & $0.702$ & $+0.014$ & $0.44$ & $0.672$ & $-0.030$ & $0.21$ \\
+		Role-interleaved & $0.717$ & $-0.000$ & $0.98$ & $0.676$ & $-0.034$ & $0.21$ \\
+		Random 1 & $0.710$ & $+0.007$ & $0.57$ & $0.647$ & $-0.004$ & $0.83$ \\
+		Random 2 & $0.718$ & $-0.001$ & $0.94$ & $0.667$ & $-0.025$ & $0.27$ \\
+		All fixed (12 runs) & $0.712$ & $+0.005$ & $0.68$ & $0.666$ & $-0.023$ & $0.29$ \\
+		First learned layer (6 seeds) & $0.729$ & $-0.013$ & $0.39$ & $0.645$ & $-0.003$ & $0.88$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+	{\footnotesize The corrected layer scores $0.717 \pm 0.017$ on NoXi and $0.642 \pm 0.029$ on NoXi+J. $\Delta$ is the corrected layer minus the other configuration; $p$ from Welch's test. The first learned layer is scored at the selected temperature.}
+
+	The corrections do not change the conclusion. The corrected layer is level with the fixed orders on NoXi and below them on NoXi+J, and it does not differ from the first learned layer on either corpus; no comparison approaches significance (smallest Holm-corrected $p = 1.0$ over the eight comparisons with fixed orders).
+
+	The read-out of $P$ (seed $95$) shows that the corrections changed the layer itself. On NoXi, $P$ is now close to a permutation: the mean largest row entry is $0.89$, $69\%$ of rows have an entry above $0.9$, and rounding gives a valid permutation for $85\%$ of the windows (previously $0.4\%$), with $754$ distinct orders. The ordering is still strongly input-dependent; the most frequent order covers only $2\%$ of the windows. Sinkhorn has still not fully converged on NoXi (row sums $0.50$ to $1.33$): the learned position queries grew during training until the per-row spread of $Z/\tau$ reached a median of $76$, at which point $50$ iterations are not enough. On NoXi+J the layer stayed soft (mean largest row entry $0.53$, $10\%$ valid rounded permutations, $1{,}172$ distinct orders), with a median spread of $Z/\tau$ of $8.3$ and row sums between $0.92$ and $1.05$.
+
+	\textbf{Why ordering cannot show a gain here.} The four fixed orders, which include very different arrangements of roles and feature types, differ from each other by at most $0.016$ on NoXi and $0.030$ on NoXi+J, which is about the seed standard deviation. A layer that always picked the best of them could therefore gain at most this much over a fixed order, below the difference of about $0.04$ that three seeds can detect (Section \ref{sec:features}). On these data the order in which the inter-modal block scans the streams matters little, and a learned ordering has little to improve.
+
+	\textbf{When the scan cannot depend on the order.} Consider a simplified bidirectional scan with no state decay ($\bar{A} = 1$), no convolution, and the same $\bar{B}_j$, $C_j$ for the forward and the backward direction, each computed from stream $j$ alone. The forward state at position $i$ is $h_i^{\rightarrow} = \sum_{j \le i} \bar{B}_j x_j$, the backward state $h_i^{\leftarrow} = \sum_{j \ge i} \bar{B}_j x_j$, so
+	$$y_i = C_i^\top\bigl(h_i^{\rightarrow} + h_i^{\leftarrow}\bigr) = C_i^\top\Bigl(\sum_{j=1}^{M} \bar{B}_j x_j + \bar{B}_i x_i\Bigr),$$
+	which depends only on stream $i$ itself and on the sum over all streams. Renumbering the positions renumbers the outputs in the same way and changes nothing else: the scan is permutation-equivariant, and after unsorting, its output does not depend on the order at all. Our block departs from this case in three places: $\bar{A} = \exp(\Delta A) < 1$, a depthwise convolution of width $4$ over neighbouring positions, and separate forward and backward parameters. Order can only matter through these, and how much it does is an empirical question, which the following tests answer.
+
+	\textcolor{red}{\textbf{Planned: testing that the order does not matter.} A non-significant difference is not evidence that there is none, so the claim is tested as an equivalence, with the margin fixed in advance at $\delta = 0.02$ CCC (about one seed standard deviation; smaller differences are of no practical consequence). Equivalence within $\pm\delta$ is shown by two one-sided tests (TOST) at $\alpha = 0.05$, i.e.\ when the $90\%$ confidence interval of the difference lies inside $(-\delta, \delta)$; for every comparison we also report the smallest margin the data establish.}
+	\begin{itemize}
+		\item \textcolor{red}{\emph{Training-time order.} Three more seeds ($3$, $4$, $5$) for each fixed order on both corpora, six per order in all. One-way ANOVA with variance components (seed and order standard deviation, with an upper confidence bound on the latter), and for each order a Welch TOST against the runs of the other three orders.}
+		\item \textcolor{red}{\emph{Inference-time order.} Every trained fixed-order model is run, without retraining, with the scan in six other orders (the three other fixed orders and three further random orders); the outputs are mapped back to the layout the heads were trained on, so only the scan order changes. The difference $\Delta$ to the same model in its own order is paired, so seed variance drops out. The unit of analysis is the trained model ($\Delta$ averaged over its probes, $12$ models per corpus), tested with a one-sample TOST.}
+		\item \textcolor{red}{\emph{Mechanism.} The distribution of $\bar{A}$ in the trained inter-modal block on the validation windows, and the share $\bar{A}^{\,M-1}$ of the state that survives the whole sequence of streams, in each direction.}
+	\end{itemize}
 
 	\subsection{Cross-Corpus Transfer: a Shift in Label Scale}
 	The analyses of this and the next subsection were made with models trained on single-session batches and core features (Sections \ref{sec:batches} and \ref{sec:features}); we have not repeated them in the final setting, but nothing in them depends on those choices. A model trained on one corpus and evaluated on the other scores close to zero. The decomposition $\text{CCC} = \rho\,C_b$ of Section \ref{sec:ccc} shows where the loss arises:
