@@ -22,8 +22,8 @@ from model import EngageNet
 from read_data import ROLES, log
 
 
-def main() -> None:
-    cnfg = EngageNetConfig(active_modalities=CORE_MODALITIES)
+def main(fusion_temporal: bool = False) -> None:
+    cnfg = EngageNetConfig(active_modalities=CORE_MODALITIES, fusion_temporal=fusion_temporal)
     M = len(cnfg.modality_names) * 2  # features x roles
     B, L = 2, cnfg.window_len
 
@@ -71,8 +71,9 @@ def main() -> None:
         assert (a > 1).all(), f"{k} alpha has values <= 1"
         assert (b > 1).all(), f"{k} beta has values <= 1"
 
-    log.info("Full model smoke-test passed!")
+    log.info(f"Full model smoke-test passed (fusion_temporal={fusion_temporal})!")
 
 
 if __name__ == "__main__":
     main()
+    main(fusion_temporal=True)

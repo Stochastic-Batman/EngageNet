@@ -106,6 +106,9 @@ class EngageNetConfig:
     probe_order: Optional[str] = None  # inference only, fixed-order models: scan in this order (blocked | interleaved | rand<k>)
     infer_tau: Optional[float] = None  # temperature at inference; None = best_tau.json of the checkpoint, else tau_min
 
+    # Temporal BiMamba on the fused representation (over L', after the inter-modal block); its output is concatenated to H for the heads
+    fusion_temporal: bool = False
+
     # Beta head
     beta_hidden: int = 128         # hidden layer width in BetaHead
     
@@ -184,6 +187,7 @@ class EngageNetConfig:
         parser.add_argument("--unsort", action="store_true")
         parser.add_argument("--probe-order", type=str, default=None)
         parser.add_argument("--infer-tau", type=float, default=None)
+        parser.add_argument("--fusion-temporal", action="store_true")
         parser.add_argument("--beta-hidden", type=int, default=128)
         parser.add_argument("--checkpoint-dir", type=str, default=None)
         parser.add_argument("--lambda-ccc", type=float, default=1.0)
@@ -234,6 +238,7 @@ class EngageNetConfig:
             unsort=args.unsort,
             probe_order=args.probe_order,
             infer_tau=args.infer_tau,
+            fusion_temporal=args.fusion_temporal,
             beta_hidden=args.beta_hidden,
             checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else cls.checkpoint_dir,
             lambda_ccc=args.lambda_ccc,

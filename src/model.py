@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from beta_head import MultiHeadBeta
-from bimamba import IntraModalBiMamba
+from bimamba import BiMambaBlock, IntraModalBiMamba
 from inter_modal import InterModalBiMamba
 from config import EngageNetConfig
 from modality_frontend import ModalityFrontend
@@ -26,6 +26,11 @@ class EngageNet(nn.Module):
         
         H = InterModalBiMamba(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.cross_modal_conv_kernel, GS_dim=cnfg.gs_dim, n_iters=cnfg.gs_iters, fixed_order=cnfg.fixed_order, position_queries=cnfg.position_queries, scale_scores=cnfg.scale_scores, unsort=cnfg.unsort, probe_order=cnfg.probe_order, dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="inter_modal")(u, tau=tau, rng=rng, train=train)  # (B, L', MC')
         
+        if cnfg.fusion_temporal:
+            # The inter-modal block fuses each frame on its own; this scans the fused state of both people over time
+            z = BiMambaBlock(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.conv_kernel, dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="fusion_temporal")(nn.Dense(C, name="fusion_proj")(H), train=train)  # (B, L', C')
+            H = jnp.concatenate([H, z], axis=-1)  # (B, L', MC' + C')
+
         multimodal, unimodal = MultiHeadBeta(hidden_dim=cnfg.beta_hidden, name="beta_heads")(H, u)  # (dict{role: (alpha, beta)}, dict{"{role}.{feat}": (alpha, beta)})
 
         return multimodal, unimodal
