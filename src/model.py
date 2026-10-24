@@ -22,7 +22,7 @@ class EngageNet(nn.Module):
 
         hiddens = ModalityFrontend(cnfg=cnfg, name="frontend")(inputs, train=train)  # dict{str: (B, L', C')}
 
-        u = IntraModalBiMamba(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.conv_kernel, dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="intra_modal")(hiddens, train=train)  # dict{str: (B, L', C')}
+        u = IntraModalBiMamba(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.conv_kernel, dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, n_layers=cnfg.intra_layers, name="intra_modal")(hiddens, train=train)  # dict{str: (B, L', C')}
         
         H = InterModalBiMamba(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.cross_modal_conv_kernel, GS_dim=cnfg.gs_dim, n_iters=cnfg.gs_iters, fixed_order=cnfg.fixed_order, position_queries=cnfg.position_queries, scale_scores=cnfg.scale_scores, unsort=cnfg.unsort, probe_order=cnfg.probe_order, dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="inter_modal")(u, tau=tau, rng=rng, train=train)  # (B, L', MC')
         

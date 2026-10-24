@@ -87,6 +87,7 @@ class IntraModalBiMamba(nn.Module):
     D_C:  int
     dt_min: float = 1e-3
     dt_max: float = 1e-1
+    n_layers: int = 1  # stacked BiMambaBlocks per feature type; layer 0 keeps the original name, so old checkpoints still load
 
     # hiddens: dict{str: (B, L', C')} -> dict{str: (B, L', C')}
     @nn.compact
@@ -97,11 +98,15 @@ class IntraModalBiMamba(nn.Module):
         u: dict[str, jax.Array] = {}
 
         for feat in feats:
-            block = BiMambaBlock(D=self.D, N=self.N, D_C=self.D_C, dt_min=self.dt_min, dt_max=self.dt_max, name=f"bimamba_{feat.replace('.', '_')}")
+            base = f"bimamba_{feat.replace('.', '_')}"
+            blocks = [BiMambaBlock(D=self.D, N=self.N, D_C=self.D_C, dt_min=self.dt_min, dt_max=self.dt_max, name=base if k == 0 else f"{base}_l{k}") for k in range(self.n_layers)]
             for role in ROLES:
                 key = f"{role}.{feat}"
                 if key not in hiddens:
                     continue
-                u[key] = block(hiddens[key], train=train)  # (B, L', C')
+                x = hiddens[key]
+                for block in blocks:
+                    x = block(x, train=train)  # (B, L', C')
+                u[key] = x
 
         return u
