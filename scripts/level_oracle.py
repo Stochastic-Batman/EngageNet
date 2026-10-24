@@ -15,8 +15,12 @@ Per corpus it prints:
 With --lag-check, also the pooled CCC and mean within-person r (averaged over the single models, and for their mean) when the
 predictions are shifted in time (positive lag = prediction delayed, as if the annotation lags behind the behaviour) or smoothed
 with a centred moving average. Shifts and smoothing stay within one person and pad with the edge value, so lengths are unchanged.
+With --bands, each person's deviation from their mean is split by timescale with centred moving averages (MA) of 2, 10 and 60 s:
+fast = x - MA2 (< 2 s), mid = MA2 - MA10 (2-10 s), slow = MA10 - MA60 (10-60 s, longer than one window), very slow = MA60 - mean
+(> 60 s); the four parts add up to x - mean exactly. Per band: share of the within-person label variance, mean within-person r
+between the prediction's and the label's band, and the pooled CCC if that band of the prediction were replaced by the truth.
 
-usage (repo root): python scripts/level_oracle.py --corpus NoXi --pred-dirs sweep_out/feat_noxi_t_besttau_s* [--data-root data] [--lag-check]
+usage (repo root): python scripts/level_oracle.py --corpus NoXi --pred-dirs sweep_out/feat_noxi_t_besttau_s* [--data-root data] [--lag-check] [--bands]
 """
 
 from __future__ import annotations
@@ -108,6 +112,34 @@ def lag_check(gt: list[np.ndarray], preds: list[list[np.ndarray]]) -> None:
         line(f"smooth {s_:.1f} s", lambda x, w=int(round(s_ * FPS)): smooth(x, w))
 
 
+BANDS_S = (2, 10, 60)
+BAND_NAMES = ("fast <2 s", "mid 2-10 s", "slow 10-60 s", "very slow >60 s")
+
+
+def bands(x: np.ndarray) -> list[np.ndarray]:
+    ma = [smooth(x, int(round(s_ * FPS))) for s_ in BANDS_S]
+    return [x - ma[0], ma[0] - ma[1], ma[1] - ma[2], ma[2] - x.mean()]
+
+
+def band_check(gt: list[np.ndarray], preds: list[list[np.ndarray]]) -> None:
+    """preds: [model][person] -> one line per timescale band."""
+    models = preds + ([[np.mean([m[i] for m in preds], axis=0) for i in range(len(gt))]] if len(preds) > 1 else [])
+    gb = [bands(y) for y in gt]
+    within = sum(y.var() * len(y) for y in gt)
+    print("  -- timescale bands of the within-person deviation --")
+    for b, name in enumerate(BAND_NAMES):
+        share = sum(x[b].var() * len(x[b]) for x in gb) / within
+        rs, oracle = [], []
+        for m in models:
+            pb = [bands(x) for x in m]
+            rs.append(np.mean([np.corrcoef(p[b], g[b])[0, 1] for p, g in zip(pb, gb) if p[b].std() > 0 and g[b].std() > 0]))
+            oracle.append(official_ccc(np.concatenate([x - p[b] + g[b] for x, p, g in zip(m, pb, gb)]), np.concatenate(gt)))
+        out = f"  {name:16s} label variance {share:5.1%} | single models: band r {np.mean(rs[:len(preds)]):+.3f}  CCC with true band {np.mean(oracle[:len(preds)]):.4f}"
+        if len(preds) > 1:
+            out += f" | mean of {len(preds)}: band r {rs[-1]:+.3f}  CCC with true band {oracle[-1]:.4f}"
+        print(out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", required=True)
@@ -115,6 +147,7 @@ def main() -> None:
     ap.add_argument("--data-root", default="data")
     ap.add_argument("--split", default="val")
     ap.add_argument("--lag-check", action="store_true")
+    ap.add_argument("--bands", action="store_true")
     args = ap.parse_args()
 
     pred_dirs = [Path(d) / args.corpus / args.split for d in args.pred_dirs]
@@ -137,6 +170,8 @@ def main() -> None:
         report(f"mean of {len(args.pred_dirs)} (not rescaled)", gt, [np.mean(x[2], axis=0) for x in people])
     if args.lag_check:
         lag_check(gt, [[x[2][k] for x in people] for k in range(len(args.pred_dirs))])
+    if args.bands:
+        band_check(gt, [[x[2][k] for x in people] for k in range(len(args.pred_dirs))])
 
 
 if __name__ == "__main__":
