@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from read_data import ROLES
-from ssm import ssm
+from ssm import coupled_ssm, ssm
 
 
 
@@ -79,6 +79,51 @@ class BiMambaBlock(nn.Module):
         u = h + nn.Dense(D)((h_fwd + h_bwd) / 2)  # (B, L', D)
 
         return u
+
+
+class DyadicBiMambaBlock(nn.Module):
+    """BiMamba over time for the two people of a session, with one SSM state per person and selective coupling between them.
+
+    Same layout as BiMambaBlock, with role-specific parameters. In each direction the state of person r takes in a share
+    (1 - A_bar) * kappa of the partner's previous state; kappa in (0, 1) is input-dependent per channel and computed from both
+    people's inputs. coupled=False fixes kappa = 0, i.e. two independent per-person temporal BiMambas (the ablation).
+    """
+    D: int
+    N: int
+    D_C: int
+    coupled: bool = True
+    dt_min: float = 1e-3
+    dt_max: float = 1e-1
+    kappa_bias: float = -1.0  # sigmoid(-1) ~ 0.27 at initialisation
+
+    # h: (2, B, L', D), role axis in ROLES order -> (2, B, L', D)
+    @nn.compact
+    def __call__(self, h: jax.Array, *, train: bool = True) -> jax.Array:
+        D, N = self.D, self.N
+        R = range(len(ROLES))
+
+        h_in = [nn.LayerNorm(name=f"pre_norm_{ROLES[r]}")(h[r]) for r in R]
+        g = [nn.silu(nn.Dense(D, name=f"gate_{ROLES[r]}")(h_in[r])) for r in R]  # (B, L', D) each
+        x = [nn.Dense(D, name=f"in_{ROLES[r]}")(h_in[r]) for r in R]
+
+        ys = {}
+        for direction in ("fwd", "bwd"):
+            xd = [x[r] if direction == "fwd" else jnp.flip(x[r], axis=1) for r in R]
+            xc = [nn.silu(nn.Conv(features=D, kernel_size=(self.D_C,), padding="SAME", feature_group_count=D, name=f"conv_{direction}_{ROLES[r]}")(xd[r])) for r in R]
+            A = jnp.stack([-jnp.exp(self.param(f"A_log_{direction}_{ROLES[r]}", _a_log_init, (D, N))) for r in R])  # (2, D, N)
+            delta = jnp.stack([nn.softplus(self.param(f"s_delta_{direction}_{ROLES[r]}", _s_delta_init(self.dt_min, self.dt_max), (D,)) + nn.Dense(D, name=f"delta_{direction}_{ROLES[r]}")(xc[r])) for r in R])
+            Bm = jnp.stack([nn.Dense(N, use_bias=False, name=f"B_{direction}_{ROLES[r]}")(xc[r]) for r in R])  # (2, B, L', N)
+            Cm = jnp.stack([nn.Dense(N, use_bias=False, name=f"C_{direction}_{ROLES[r]}")(xc[r]) for r in R])
+            if self.coupled:
+                # Coupling of person r depends on both people's current input: when does the partner's state matter for r?
+                kappa = jnp.stack([nn.sigmoid(nn.Dense(D, bias_init=nn.initializers.constant(self.kappa_bias), name=f"kappa_{direction}_{ROLES[r]}")(jnp.concatenate([xc[r], xc[1 - r]], axis=-1))) for r in R])
+                self.sow("intermediates", f"kappa_mean_{direction}", kappa.mean(axis=(1, 2, 3)))  # (2,) per role
+            else:
+                kappa = jnp.zeros_like(delta)
+            y = coupled_ssm(jnp.stack(xc), delta, A, Bm, Cm, kappa)  # (2, B, L', D)
+            ys[direction] = y if direction == "fwd" else jnp.flip(y, axis=2)
+
+        return jnp.stack([h[r] + nn.Dense(D, name=f"out_{ROLES[r]}")(g[r] * (ys["fwd"][r] + ys["bwd"][r]) / 2) for r in R])
 
 
 class IntraModalBiMamba(nn.Module):

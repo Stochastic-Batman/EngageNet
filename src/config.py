@@ -108,6 +108,9 @@ class EngageNetConfig:
 
     # Temporal BiMamba on the fused representation (over L', after the inter-modal block); its output is concatenated to H for the heads
     fusion_temporal: bool = False
+    # Coupled dyadic BiMamba over time: one state per person, selective coupling to the partner's state; its output is concatenated to H, per role
+    dyadic_ssm: bool = False
+    dyadic_uncoupled: bool = False  # ablation: kappa = 0, two independent per-person temporal BiMambas
 
     # Beta head
     beta_hidden: int = 128         # hidden layer width in BetaHead
@@ -188,6 +191,8 @@ class EngageNetConfig:
         parser.add_argument("--probe-order", type=str, default=None)
         parser.add_argument("--infer-tau", type=float, default=None)
         parser.add_argument("--fusion-temporal", action="store_true")
+        parser.add_argument("--dyadic-ssm", action="store_true")
+        parser.add_argument("--dyadic-uncoupled", action="store_true")
         parser.add_argument("--beta-hidden", type=int, default=128)
         parser.add_argument("--checkpoint-dir", type=str, default=None)
         parser.add_argument("--lambda-ccc", type=float, default=1.0)
@@ -239,6 +244,8 @@ class EngageNetConfig:
             probe_order=args.probe_order,
             infer_tau=args.infer_tau,
             fusion_temporal=args.fusion_temporal,
+            dyadic_ssm=args.dyadic_ssm,
+            dyadic_uncoupled=args.dyadic_uncoupled,
             beta_hidden=args.beta_hidden,
             checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else cls.checkpoint_dir,
             lambda_ccc=args.lambda_ccc,

@@ -58,12 +58,12 @@ class BetaHead(nn.Module):
 class MultiHeadBeta(nn.Module):
     hidden_dim: int = 128
 
-    # fused: (B, L', MC') ; per_modality: dict{"{role}.{feat}": (B, L', C')}
+    # fused: (B, L', MC') shared by both roles, or dict{role: (B, L', ...)} ; per_modality: dict{"{role}.{feat}": (B, L', C')}
     # -> (multimodal: dict{role: (alpha, beta)}, unimodal: dict{"{role}.{feat}": (alpha, beta)})
     @nn.compact
-    def __call__(self, fused: jax.Array, per_modality: dict[str, jax.Array]) -> tuple[dict[str, tuple[jax.Array, jax.Array]], dict[str, tuple[jax.Array, jax.Array]]]:
+    def __call__(self, fused: jax.Array | dict[str, jax.Array], per_modality: dict[str, jax.Array]) -> tuple[dict[str, tuple[jax.Array, jax.Array]], dict[str, tuple[jax.Array, jax.Array]]]:
         # One multimodal head per role, both reading the same fused representation
-        multimodal = {role: BetaHead(hidden_dim=self.hidden_dim, name=f"multi_head_{role}")(fused) for role in ROLES}
+        multimodal = {role: BetaHead(hidden_dim=self.hidden_dim, name=f"multi_head_{role}")(fused[role] if isinstance(fused, dict) else fused) for role in ROLES}
 
         feats = sorted(set(key.split(".", 1)[1] for key in per_modality))
         unimodal: dict[str, tuple[jax.Array, jax.Array]] = {}

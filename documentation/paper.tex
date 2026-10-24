@@ -684,6 +684,61 @@
 
 	The window-length comparison of the seed-variability experiment was made with single-session batches and core features and has not been repeated in the final setting; the final configuration keeps $10$ s windows.
 
+	\subsection{Where the Remaining Error Lies}
+	\label{sec:dynamics}
+	The pooled CCC rewards two things: placing each person's overall level of engagement correctly relative to the other people, and following the changes within each person's session. To see which of the two limits the final models, we split the prediction for each person (one role in one session, $20$ people per corpus) into its mean and the deviations from that mean, and replace one part at a time by the truth. \emph{True level} keeps our deviations but shifts each person's prediction to the true mean; \emph{true dynamics} keeps our mean but uses the true deviations; \emph{level only} predicts each person's true mean as a constant.
+
+	\begin{center}
+	\small
+	\begin{tabular}{lcc}
+		\toprule
+		\textbf{Final models (mean over six seeds)} & \textbf{NoXi} & \textbf{NoXi+J} \\
+		\midrule
+		Share of the label variance between people & $51\%$ & $26\%$ \\
+		CCC & $0.731$ & $0.641$ \\
+		CCC with the true level & $0.774$ & $0.692$ \\
+		CCC of the true level alone & $0.673$ & $0.414$ \\
+		CCC with the true dynamics & $\mathbf{0.955}$ & $\mathbf{0.945}$ \\
+		Pearson $r$ of the person means & $0.90$ & $0.89$ \\
+		Mean within-person Pearson $r$ & $0.47$ & $0.60$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+
+	The level is largely right: the predicted person means correlate at $0.90$ with the true ones, and a perfect level would add only $0.04$ to $0.05$. With perfect dynamics the CCC would reach $0.95$. Within a person, however, the prediction correlates with the annotation at only $0.47$ on NoXi and $0.60$ on NoXi+J. The remaining error therefore lies in following engagement within a session, not in its overall level.
+
+	Two simple explanations can be excluded. If the annotators reacted with a delay, a shifted prediction would score higher; shifting the predictions by $-4$ to $+6$ s changes nothing on NoXi (the best shift is $0$) and gains at most $0.013$ on NoXi+J (a delay of $1.5$ s). If the predictions were merely noisy, smoothing would help; a centred moving average of $0.5$ to $8$ s gains at most $0.003$ on NoXi and $0.018$ on NoXi+J. The gap is a matter of modelling.
+
+	\subsection{Temporal Modelling after Fusion}
+	\label{sec:fusiontemporal}
+	In the architecture of Sections \ref{sec:intermodal} and \ref{sec:gumbel}, time is modelled only within each stream: the intra-modal BiMamba scans each feature of each person over time, and the inter-modal block fuses the $M$ streams frame by frame. The fused state of the two people is never modelled over time. We therefore add one BiMamba block over time on the fused representation,
+	$$z = \text{BiMamba}(H W_z) \in \R^{L' \times C'}, \qquad W_z \in \R^{MC' \times C'},$$
+	with the structure and initialisation of the intra-modal block (convolution width $4$), and let both multimodal heads read the concatenation $[H, z]$, so that the frame-wise path is unchanged. This adds $0.26$M parameters ($2.06$M to $2.33$M). Six seeds each, compared with the final models of Section \ref{sec:features}:
+
+	\begin{center}
+	\small
+	\begin{tabular}{lcc}
+		\toprule
+		& \textbf{NoXi} & \textbf{NoXi+J} \\
+		\midrule
+		Final model & $\mathbf{0.731 \pm 0.020}$ & $0.641 \pm 0.018$ \\
+		+ temporal block after fusion & $0.724 \pm 0.014$ & $\mathbf{0.684 \pm 0.024}$ \\
+		$\Delta$ ($p$, Welch) & $-0.007$ $(0.53)$ & $\mathbf{+0.043}$ $(\mathbf{0.006})$ \\
+		\midrule
+		Mean of the six models (not rescaled): final & $0.756$ & $0.696$ \\
+		Mean of the six models (not rescaled): + temporal block & $0.755$ & $\mathbf{0.729}$ \\
+		Within-person $r$ of the mean: final & $0.512$ & $0.687$ \\
+		Within-person $r$ of the mean: + temporal block & $0.529$ & $\mathbf{0.746}$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+
+	On NoXi+J the temporal block raises the CCC by $0.043$; the difference stays significant after the Holm correction over the two corpora ($p = 0.012$), and each of the six seeds scores higher than the final model with the same seed. The gain comes from where the previous subsection located the error: the within-person correlation rises from $0.69$ to $0.75$. The mean of the six models reaches $0.729$ without rescaling, above the rescaled ensemble we submitted ($0.714$). On NoXi the block has no effect. This fits the variance split above: on NoXi+J three quarters of the label variance lie within a person, on NoXi only half. Both runs use the first implementation of the ordering layer (Section \ref{sec:fixedorder}). \textcolor{red}{Open: the rescaled ensemble and test predictions with these models.}
+
+	\textcolor{red}{\textbf{Planned: coupling the two people over time.} The temporal block above scans one joint representation of both people. A more explicit model gives each person $r$ their own state over time and lets it take in the partner's state $\bar{r}$ when that is relevant:
+	$$h^{r}_t = \bar{A}^{r}_t \odot h^{r}_{t-1} + (1 - \bar{A}^{r}_t) \odot \kappa^{r}_t \odot h^{\bar{r}}_{t-1} + \bar{B}^{r}_t x^{r}_t, \qquad \kappa^{r}_t = \sigma\bigl(W_\kappa^{r} [x^{r}_t;\, x^{\bar{r}}_t] + b_\kappa^{r}\bigr) \in (0,1)^{C'},$$
+	in both directions, with role-specific parameters. Here $x^{r}_t$ is a frame-wise projection of person $r$'s own five intra-modal outputs, and the head of person $r$ reads $[H, z^{r}]$. The selective coupling $\kappa$ decides, per channel and from both people's current input, how much of the partner's state enters; it only replaces state that has decayed, so each row of the $2 \times 2$ transition sums to at most $1$ and the state stays bounded. With $\kappa = 0$ the model reduces to two independent per-person temporal BiMambas, which serves as the ablation. Both variants are compared with the temporal block above, three seeds each.}
+
 	\subsection{Learned versus Fixed Modality Ordering}
 	\label{sec:fixedorder}
 	The ordering layer of Section \ref{sec:gumbel} is a contribution only if it does better than a fixed order. We trained the final configuration (core features plus text, mixed batches, full objective) with the meta-network removed and $P$ replaced by a constant permutation matrix, for four fixed orders of the $M = 10$ streams, with three seeds each ($95$, $1$, $2$), and compared each with the six seeds of the learned ordering by Welch's $t$-test, as in Section \ref{sec:features}. The four orders are: (i) role-blocked, the five streams of the expert followed by the five of the novice, feature types in alphabetical order (the order in which the code stacks the streams before $P$ is applied); (ii) role-interleaved, the expert and novice streams of each feature type next to each other; (iii) and (iv) two random orders, drawn once and kept fixed for all seeds. An order and its reverse are not both included: the forward and backward scans of the bidirectional block have the same structure and separately initialised parameters, so reversing the sequence only exchanges their roles.
