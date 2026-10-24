@@ -101,8 +101,8 @@ def run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, tta
         stats["windows"] += len(buf)
 
     buf: list[dict] = []
-    for idx, window in enumerate(ds.iter_windows()):
-        window_starts.append(idx * cnfg.window_stride)
+    for start, window in ds.iter_windows_with_starts():
+        window_starts.append(start)
         buf.append(window)
         if len(buf) == cnfg.infer_batch:
             flush(buf)

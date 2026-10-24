@@ -169,6 +169,16 @@ class EngageNetDataset:
         return max(1, 1 + (common_T - self.cnfg.window_len) // self.cnfg.window_stride)
 
 
+    def _window_starts(self, common_T: int) -> list[int]:
+        """Start frames of the windows of one session. With cover_tail, one extra window ending at the last frame covers the
+        tail that the regular stride leaves out (up to window_stride - 1 frames; matters for long windows)."""
+        W = self.cnfg.window_len
+        starts = [w * self.cnfg.window_stride for w in range(self._n_windows(common_T))]
+        if self.cnfg.cover_tail and common_T > W and starts[-1] + W < common_T:
+            starts.append(common_T - W)
+        return starts
+
+
     def _slice_window(self, prep: dict, session_name: str, start: int) -> dict[str, np.ndarray]:
         W = self.cnfg.window_len
         end = start + W
@@ -184,14 +194,21 @@ class EngageNetDataset:
         return sample
 
 
-    def _windows_from_session(self, session_dir: Path) -> Iterator[dict[str, np.ndarray]]:
+    def _windows_from_session(self, session_dir: Path, with_starts: bool = False) -> Iterator:
         prep = self._prepare_session(session_dir)
         if prep is None:
             return
 
         # 4. Slice into windows
-        for w in range(self._n_windows(prep["common_T"])):
-            yield self._slice_window(prep, session_dir.name, w * self.cnfg.window_stride)
+        for start in self._window_starts(prep["common_T"]):
+            window = self._slice_window(prep, session_dir.name, start)
+            yield (start, window) if with_starts else window
+
+
+    def iter_windows_with_starts(self) -> Iterator[tuple[int, dict[str, np.ndarray]]]:
+        """Like iter_windows (sessions in order), yielding (start frame, window); inference needs the starts for overlap-add."""
+        for d in self.session_dirs:
+            yield from self._windows_from_session(d, with_starts=True)
 
 
     def iter_windows_global(self, seed: int = 0) -> Iterator[dict[str, np.ndarray]]:
@@ -208,7 +225,7 @@ class EngageNetDataset:
                 if prep is not None:
                     cache.append((d.name, prep))
             self._cache = cache
-            self._index = [(i, w * self.cnfg.window_stride) for i, (_n, prep) in enumerate(cache) for w in range(self._n_windows(prep["common_T"]))]
+            self._index = [(i, start) for i, (_n, prep) in enumerate(cache) for start in self._window_starts(prep["common_T"])]
             mb = sum(a.nbytes for _n, prep in cache for a in prep["resampled"].values()) / 2**20
             log.info(f"Global window shuffle: {len(self._index)} windows from {len(cache)} sessions cached in memory ({mb:.0f} MiB)")
 

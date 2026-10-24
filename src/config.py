@@ -38,6 +38,7 @@ class EngageNetConfig:
     target_sr: float = 25.0        # resample every stream to this sample rate (Hz)
     window_len: int = 250          # frames per window  (= 10 s @ 25 Hz)
     window_stride: int = 125       # hop between windows (= 5 s, 50 % overlap)
+    cover_tail: bool = False       # add one window ending at the last frame, so the session tail is predicted, not filled
 
     # Modality specs  (name -> (C_i, C_i', kernel, stride))
     # This is the full catalogue; use active_modalities to select a subset.
@@ -156,6 +157,7 @@ class EngageNetConfig:
         parser.add_argument("--target-sr", type=float, default=25.0)
         parser.add_argument("--window-len", type=int, default=250)
         parser.add_argument("--window-stride", type=int, default=125)
+        parser.add_argument("--cover-tail", action="store_true")
         parser.add_argument("--active-modalities", nargs="*", default=None)
         parser.add_argument("--no-normalize-inputs", dest="normalize_inputs", action="store_false")
         parser.add_argument("--shuffle-windows", action="store_true")
@@ -208,6 +210,7 @@ class EngageNetConfig:
             target_sr=args.target_sr,
             window_len=args.window_len,
             window_stride=args.window_stride,
+            cover_tail=args.cover_tail,
             active_modalities=args.active_modalities,
             normalize_inputs=args.normalize_inputs,
             shuffle_windows=args.shuffle_windows,

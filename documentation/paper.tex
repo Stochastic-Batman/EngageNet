@@ -709,6 +709,26 @@
 
 	Two simple explanations can be excluded. If the annotators reacted with a delay, a shifted prediction would score higher; shifting the predictions by $-4$ to $+6$ s changes nothing on NoXi (the best shift is $0$) and gains at most $0.013$ on NoXi+J (a delay of $1.5$ s). If the predictions were merely noisy, smoothing would help; a centred moving average of $0.5$ to $8$ s gains at most $0.003$ on NoXi and $0.018$ on NoXi+J. The gap is a matter of modelling.
 
+	To see which timescales are missed, we split each person's deviation from their mean with centred moving averages of $2$, $10$ and $60$ s into four bands, fast ($< 2$ s), mid ($2$ to $10$ s), slow ($10$ to $60$ s) and very slow ($> 60$ s), which add up to the deviation exactly. For each band we report its share of the within-person label variance, the mean within-person correlation between the prediction's and the label's band, and the pooled CCC if that band of the prediction were replaced by the truth (final models, mean over six seeds; CCC $0.731$ on NoXi and $0.641$ on NoXi+J):
+
+	\begin{center}
+	\small
+	\begin{tabular}{lcccccc}
+		\toprule
+		& \multicolumn{3}{c}{\textbf{NoXi}} & \multicolumn{3}{c}{\textbf{NoXi+J}} \\
+		\textbf{Band} & \textbf{Variance} & $r$ & \textbf{CCC if true} & \textbf{Variance} & $r$ & \textbf{CCC if true} \\
+		\midrule
+		Fast, $< 2$ s & $2.6\%$ & $0.06$ & $0.749$ & $1.2\%$ & $0.00$ & $0.665$ \\
+		Mid, $2$ to $10$ s & $10.0\%$ & $0.37$ & $0.781$ & $5.5\%$ & $0.20$ & $0.711$ \\
+		Slow, $10$ to $60$ s & $32.0\%$ & $0.58$ & $0.813$ & $32.1\%$ & $0.55$ & $\mathbf{0.794}$ \\
+		Very slow, $> 60$ s & $40.6\%$ & $0.45$ & $\mathbf{0.844}$ & $48.5\%$ & $0.78$ & $0.764$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+	{\footnotesize The variance shares do not add up to $100\%$ because the moving-average bands are not exactly uncorrelated. The gains of different bands overlap and do not add up either.}
+
+	Most of the within-person variance, $73\%$ on NoXi and $81\%$ on NoXi+J, changes more slowly than the $10$ s window, and these bands also hold most of the missing score: the very slow band alone would add $0.11$ on NoXi, where the model follows it worst ($r = 0.45$), and the slow band $0.15$ on NoXi+J. Every window starts from a zero state, so a change slower than the window has to be inferred anew from $10$ s of evidence in each window. The bands below $10$ s hold little variance and would add at most $0.07$.
+
 	\subsection{Temporal Modelling after Fusion}
 	\label{sec:fusiontemporal}
 	In the architecture of Sections \ref{sec:intermodal} and \ref{sec:gumbel}, time is modelled only within each stream: the intra-modal BiMamba scans each feature of each person over time, and the inter-modal block fuses the $M$ streams frame by frame. The fused state of the two people is never modelled over time. We therefore add one BiMamba block over time on the fused representation,
