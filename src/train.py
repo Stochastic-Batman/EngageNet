@@ -169,6 +169,8 @@ def create_train_state(cnfg: EngageNetConfig, rng: jax.Array) -> TrainState:
     variables = model.init(rng_init, dummy, tau=1.0, rng=rng_gumbel, train=False)
 
     tx = optax.adamw(learning_rate=cnfg.lr, weight_decay=cnfg.weight_decay)
+    if cnfg.grad_clip is not None:
+        tx = optax.chain(optax.clip_by_global_norm(cnfg.grad_clip), tx)  # caps single large updates (long windows)
 
     return TrainState.create(apply_fn=model.apply, params=variables["params"], tx=tx, batch_stats=variables.get("batch_stats", {}))
 

@@ -60,6 +60,7 @@ class EngageNetConfig:
     batch_size: int = 8
     seed: int = 95
     lr: float = 1e-3
+    grad_clip: Optional[float] = None  # clip the global gradient norm to this value; None = no clipping (original)
     weight_decay: float = 1e-4
     n_epochs: int = 50
     tau_init: float = 1.0
@@ -165,6 +166,7 @@ class EngageNetConfig:
         parser.add_argument("--batch-size", type=int, default=8)
         parser.add_argument("--seed", type=int, default=95)
         parser.add_argument("--lr", type=float, default=1e-3)
+        parser.add_argument("--grad-clip", type=float, default=None)
         parser.add_argument("--weight-decay", type=float, default=1e-4)
         parser.add_argument("--n-epochs", type=int, default=50)
         parser.add_argument("--tau-init", type=float, default=1.0)
@@ -218,6 +220,7 @@ class EngageNetConfig:
             batch_size=args.batch_size,
             seed=args.seed,
             lr=args.lr,
+            grad_clip=args.grad_clip,
             weight_decay=args.weight_decay,
             n_epochs=args.n_epochs,
             tau_init=args.tau_init,
