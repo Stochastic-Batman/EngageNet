@@ -13,7 +13,7 @@ import numpy as np
 from typing import Iterator
 
 from config import EngageNetConfig
-from dataset import EngageNetDataset
+from dataset import EngageNetDataset, pad_slow
 
 
 def _collate(windows: list[dict[str, np.ndarray]]) -> dict[str, jnp.ndarray]:
@@ -23,10 +23,12 @@ def _collate(windows: list[dict[str, np.ndarray]]) -> dict[str, jnp.ndarray]:
     The "session" key is kept as a plain Python list of strings.
     """
     batch: dict[str, jnp.ndarray] = {}
-    keys = [k for k in windows[0].keys() if k != "session"]
+    keys = [k for k in windows[0].keys() if k != "session" and k != "window_start" and not k.startswith("slow.")]
     
     for k in keys:
         batch[k] = jnp.array(np.stack([w[k] for w in windows], axis=0))
+    for k, v in pad_slow(windows).items():  # slow-path inputs have a per-session length
+        batch[k] = jnp.array(v)
         
     batch["session"] = [w["session"] for w in windows]
     
@@ -47,7 +49,7 @@ def iter_batches(cnfg: EngageNetConfig, split: str, *, shuffle: bool = False, se
     """
     if shuffle and cnfg.shuffle_windows:
         # Windows shuffled across ALL sessions: every batch mixes sessions (and usually genders)
-        key = (cnfg.corpus, split, cnfg.window_len, cnfg.window_stride, cnfg.target_sr, tuple(cnfg.modality_names))
+        key = (cnfg.corpus, split, cnfg.window_len, cnfg.window_stride, cnfg.target_sr, tuple(cnfg.modality_names), cnfg.slow_path, cnfg.slow_bin)
         if key not in _GLOBAL_CACHE:
             _GLOBAL_CACHE[key] = EngageNetDataset(cnfg, split)
         windows = _GLOBAL_CACHE[key].iter_windows_global(seed=seed if seed is not None else 0)

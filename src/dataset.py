@@ -50,6 +50,31 @@ def _pad_or_trim(arr: np.ndarray, length: int) -> np.ndarray:
     return np.concatenate([arr, pad], axis=0)
 
 
+# Slow-path sequences are zero-padded to a multiple of this many bins, so only a few batch shapes get compiled
+SLOW_PAD = 64
+
+
+def _bin_means(arr: np.ndarray, bin_len: int) -> np.ndarray:
+    """(T, D) -> (ceil(T / bin_len), D) means over consecutive bins; the last bin may be shorter."""
+    edges = np.arange(0, arr.shape[0], bin_len)
+    counts = np.diff(np.append(edges, arr.shape[0]))
+    return (np.add.reduceat(arr.astype(np.float64), edges, axis=0) / counts[:, None]).astype(np.float32)
+
+
+def pad_slow(windows: list[dict]) -> dict[str, np.ndarray]:
+    """Stack the per-session slow-path inputs of a list of windows, zero-padded to a common length, plus "slow_mask" (B, S)
+    and "window_start" (B,). Empty when the windows carry no slow inputs."""
+    keys = [k for k in windows[0] if k.startswith("slow.")]
+    if not keys:
+        return {}
+    n = np.array([w[keys[0]].shape[0] for w in windows])
+    S = -(-int(n.max()) // SLOW_PAD) * SLOW_PAD
+    out = {k: np.stack([_pad_or_trim(w[k], S) for w in windows], axis=0) for k in keys}
+    out["slow_mask"] = (np.arange(S)[None] < n[:, None]).astype(np.float32)
+    out["window_start"] = np.stack([w["window_start"] for w in windows], axis=0)
+    return out
+
+
 def _gender_code(session_dir: Path, role: str) -> int:
     """Binary group label for one participant; -1 when absent or unrecognised."""
     from read_data import read_scalar_annotation
@@ -162,7 +187,11 @@ class EngageNetDataset:
         # 3b. Per-participant group label - constant across the session, so read once
         genders = {role: np.int8(_gender_code(session_dir, role)) for role in ROLES}
 
-        return {"resampled": resampled, "engagement": engagement, "genders": genders, "common_T": common_T}
+        prep = {"resampled": resampled, "engagement": engagement, "genders": genders, "common_T": common_T}
+        if cnfg.slow_path:
+            # Whole-session input of the slow path: bin means over the common length, (S, D) per stream
+            prep["slow"] = {key: _bin_means(arr[:common_T], cnfg.slow_bin) for key, arr in resampled.items()}
+        return prep
 
 
     def _n_windows(self, common_T: int) -> int:
@@ -191,6 +220,10 @@ class EngageNetDataset:
             if prep["engagement"][role] is not None:
                 sample[f"{role}.engagement"] = prep["engagement"][role][start:end]
             sample[f"{role}.gender"] = prep["genders"][role]
+        if "slow" in prep:
+            for key, arr in prep["slow"].items():
+                sample[f"slow.{key}"] = arr  # (S, D), the same array for every window of the session; stacked by pad_slow
+            sample["window_start"] = np.asarray(start, dtype=np.int32)
         return sample
 
 
@@ -228,6 +261,9 @@ class EngageNetDataset:
             self._index = [(i, start) for i, (_n, prep) in enumerate(cache) for start in self._window_starts(prep["common_T"])]
             mb = sum(a.nbytes for _n, prep in cache for a in prep["resampled"].values()) / 2**20
             log.info(f"Global window shuffle: {len(self._index)} windows from {len(cache)} sessions cached in memory ({mb:.0f} MiB)")
+            if self.cnfg.slow_path:
+                n_bins = [next(iter(prep["slow"].values())).shape[0] for _n, prep in cache]
+                log.info(f"Slow path: {self.cnfg.slow_bin}-frame bins, {min(n_bins)} to {max(n_bins)} bins per session")
 
         order = np.random.default_rng(seed).permutation(len(self._index))
         for k in order:
