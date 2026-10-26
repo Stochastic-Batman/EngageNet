@@ -24,8 +24,8 @@ from model import EngageNet
 from read_data import ROLES, log
 
 
-def main(fusion_temporal: bool = False, intra_layers: int = 1, slow_path: bool = False) -> None:
-    cnfg = EngageNetConfig(active_modalities=CORE_MODALITIES, fusion_temporal=fusion_temporal, intra_layers=intra_layers, slow_path=slow_path)
+def main(fusion_temporal: bool = False, intra_layers: int = 1, slow_path: bool = False, slow_center: bool = False) -> None:
+    cnfg = EngageNetConfig(active_modalities=CORE_MODALITIES, fusion_temporal=fusion_temporal, intra_layers=intra_layers, slow_path=slow_path, slow_center=slow_center)
     M = len(cnfg.modality_names) * 2  # features x roles
     B, L = 2, cnfg.window_len
 
@@ -109,3 +109,4 @@ if __name__ == "__main__":
     main(fusion_temporal=True)
     main(fusion_temporal=True, intra_layers=2)
     main(fusion_temporal=True, slow_path=True)
+    main(fusion_temporal=True, slow_path=True, slow_center=True)

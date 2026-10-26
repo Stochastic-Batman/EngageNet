@@ -46,6 +46,11 @@ class SlowPath(nn.Module):
         if any(cnfg.stride(f) != 1 for f in cnfg.modality_names):
             raise ValueError("slow_path assumes stride-1 encoders (window frame k = session frame start + k)")
         mask = inputs["slow_mask"]  # (B, S)
+        m = mask[..., None]  # (B, S, 1)
+
+        def session_centre(x: jax.Array) -> jax.Array:
+            # Subtract the mean over the real bins of each session: a constant per session cannot pass
+            return (x - (x * m).sum(1, keepdims=True) / jnp.maximum(m.sum(1, keepdims=True), 1.0)) * m
 
         # Per-feature projection, shared by both roles (as in ModalityFrontend; no BatchNorm, which padding would bias)
         hiddens: dict[str, jax.Array] = {}
@@ -54,12 +59,16 @@ class SlowPath(nn.Module):
             for role in ROLES:
                 key = f"{role}.{feat}"
                 if f"slow.{key}" in inputs:
-                    hiddens[key] = proj(inputs[f"slow.{key}"])  # (B, S, C_s)
+                    x = inputs[f"slow.{key}"]  # (B, S, C_i)
+                    hiddens[key] = proj(session_centre(x) if cnfg.slow_center else x)  # (B, S, C_s)
 
         u = IntraModalBiMamba(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.conv_kernel, dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="intra_modal")(hiddens, train=train, mask=mask)
         # Order of the streams has no measurable effect (Section 4.8), so the slow path uses a fixed one
         H = InterModalBiMamba(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.cross_modal_conv_kernel, fixed_order="blocked", dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="inter_modal")(u, train=train)  # (B, S, MC_s)
         s = BiMambaBlock(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.conv_kernel, dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="temporal")(nn.Dense(C, name="fusion_proj")(H), train=train, mask=mask)  # (B, S, C_s)
+
+        if cnfg.slow_center:
+            s = session_centre(s)  # the slow path can only shift the prediction within a session, not set its level
 
         t = inputs["window_start"].astype(jnp.int32)[:, None] + jnp.arange(n_frames)[None]  # (B, L')
         n_bins = jnp.maximum(mask.sum(-1).astype(jnp.int32), 1)

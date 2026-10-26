@@ -116,6 +116,7 @@ class EngageNetConfig:
     slow_path: bool = False
     slow_bin: int = 50
     slow_dim: int = 64
+    slow_center: bool = False  # subtract the session mean from the slow path's inputs and output (no per-session level)
 
     # Beta head
     beta_hidden: int = 128         # hidden layer width in BetaHead
@@ -202,6 +203,7 @@ class EngageNetConfig:
         parser.add_argument("--slow-path", action="store_true")
         parser.add_argument("--slow-bin", type=int, default=50)
         parser.add_argument("--slow-dim", type=int, default=64)
+        parser.add_argument("--slow-center", action="store_true")
         parser.add_argument("--beta-hidden", type=int, default=128)
         parser.add_argument("--checkpoint-dir", type=str, default=None)
         parser.add_argument("--lambda-ccc", type=float, default=1.0)
@@ -259,6 +261,7 @@ class EngageNetConfig:
             slow_path=args.slow_path,
             slow_bin=args.slow_bin,
             slow_dim=args.slow_dim,
+            slow_center=args.slow_center,
             beta_hidden=args.beta_hidden,
             checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else cls.checkpoint_dir,
             lambda_ccc=args.lambda_ccc,
