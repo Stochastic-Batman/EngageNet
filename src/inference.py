@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from aggregator import aggregate_windows
 from beta_head import predictive_mean
 from config import EngageNetConfig
-from dataset import EngageNetDataset, pad_slow
+from dataset import EngageNetDataset
 from model import EngageNet
 from read_data import ROLES, load_session, log
 from train import TrainState, create_train_state
@@ -65,10 +65,8 @@ def predict_batch(state: TrainState, stream_inputs: dict[str, jax.Array], tau: f
 
 def _stack(windows: list[dict]) -> dict[str, jax.Array]:
     # Stream tensors only: engagement / gender / session are not model inputs
-    keys = [k for k, v in windows[0].items() if isinstance(v, np.ndarray) and not k.endswith(".engagement") and not k.endswith(".gender") and k != "window_start" and not k.startswith("slow.")]
-    out = {k: jnp.asarray(np.stack([w[k] for w in windows], axis=0)) for k in keys}
-    out.update({k: jnp.asarray(v) for k, v in pad_slow(windows).items()})  # slow-path inputs, if any
-    return out
+    keys = [k for k, v in windows[0].items() if isinstance(v, np.ndarray) and not k.endswith(".engagement") and not k.endswith(".gender")]
+    return {k: jnp.asarray(np.stack([w[k] for w in windows], axis=0)) for k in keys}
 
 
 # tta_state: None -> plain inference with `state`; otherwise a fresh TTA state (reset per session by the caller)

@@ -164,11 +164,6 @@ def create_train_state(cnfg: EngageNetConfig, rng: jax.Array) -> TrainState:
         c_in = cnfg.input_dim(feat)
         for role in ROLES:
             dummy[f"{role}.{feat}"] = jnp.zeros((cnfg.batch_size, c_in, cnfg.window_len))
-            if cnfg.slow_path:
-                dummy[f"slow.{role}.{feat}"] = jnp.zeros((cnfg.batch_size, 8, c_in))  # parameter shapes do not depend on S
-    if cnfg.slow_path:
-        dummy["slow_mask"] = jnp.ones((cnfg.batch_size, 8))
-        dummy["window_start"] = jnp.zeros((cnfg.batch_size,), jnp.int32)
 
     rng_init, rng_gumbel = jax.random.split(rng)
     variables = model.init(rng_init, dummy, tau=1.0, rng=rng_gumbel, train=False)

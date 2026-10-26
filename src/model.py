@@ -9,7 +9,6 @@ from bimamba import BiMambaBlock, IntraModalBiMamba
 from inter_modal import InterModalBiMamba
 from config import EngageNetConfig
 from modality_frontend import ModalityFrontend
-from slow_path import SlowPath
 
 
 class EngageNet(nn.Module):
@@ -31,11 +30,6 @@ class EngageNet(nn.Module):
             # The inter-modal block fuses each frame on its own; this scans the fused state of both people over time
             z = BiMambaBlock(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.conv_kernel, dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="fusion_temporal")(nn.Dense(C, name="fusion_proj")(H), train=train)  # (B, L', C')
             H = jnp.concatenate([H, z], axis=-1)  # (B, L', MC' + C')
-
-        if cnfg.slow_path:
-            # Second rate: the whole session in slow_bin-frame bins, read back at this window's frames
-            s = SlowPath(cnfg=cnfg, name="slow_path")(inputs, n_frames=H.shape[1], train=train)  # (B, L', C_s)
-            H = jnp.concatenate([H, s], axis=-1)
 
         multimodal, unimodal = MultiHeadBeta(hidden_dim=cnfg.beta_hidden, name="beta_heads")(H, u)  # (dict{role: (alpha, beta)}, dict{"{role}.{feat}": (alpha, beta)})
 

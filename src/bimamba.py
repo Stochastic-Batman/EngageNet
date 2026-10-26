@@ -45,21 +45,16 @@ class BiMambaBlock(nn.Module):
     dt_max: float = 1e-1  # largest delta at init -> shortest receptive field
     record_decay: bool = False  # sow statistics of A_bar = exp(delta*A) (diagnostics, read with mutable=["intermediates"])
 
-    # h: (B, L', D) ; mask: (B, L') with 1 = real step, 0 = padding, or None -> (B, L', D)
+    # h: (B, L', D) -> (B, L', D)
     @nn.compact
-    def __call__(self, h: jax.Array, *, train: bool = True, mask: jax.Array | None = None) -> jax.Array:
+    def __call__(self, h: jax.Array, *, train: bool = True) -> jax.Array:
         D, N = self.D, self.N
 
         h_in = nn.LayerNorm(name="pre_norm")(h) if self.pre_norm else h
         g = nn.silu(nn.Dense(D)(h_in))  # (B, L', D)
         x = nn.Dense(D)(h_in)  # (B, L', D)
-        m = None if mask is None else mask[..., None].astype(x.dtype)  # (B, L', 1)
-        if m is not None:
-            x = x * m  # padded steps feed nothing into the convolution or the scan, so the state there stays at zero
-
+        
         x_fwd = nn.silu(nn.Conv(features=D, kernel_size=(self.D_C,), padding="SAME", feature_group_count=D)(x))
-        if m is not None:
-            x_fwd = x_fwd * m
         # A stored in log-space so exp keeps it negative -> A_bar = exp(delta*A) in (0,1), stable
         A_fwd = -jnp.exp(self.param("A_log_fwd", _a_log_init, (D, N)))
         delta_fwd = nn.softplus(self.param("s_delta_fwd", _s_delta_init(self.dt_min, self.dt_max), (D,)) + nn.Dense(D)(x_fwd))
@@ -68,8 +63,6 @@ class BiMambaBlock(nn.Module):
         h_fwd = g * ssm(x_fwd, delta_fwd, A_fwd, B_fwd, C_fwd)  # (B, L', D)
 
         x_bwd = nn.silu(nn.Conv(features=D, kernel_size=(self.D_C,), padding="SAME", feature_group_count=D)(jnp.flip(x, axis=1)))
-        if m is not None:
-            x_bwd = x_bwd * jnp.flip(m, axis=1)
         A_bwd = -jnp.exp(self.param("A_log_bwd", _a_log_init, (D, N)))
         delta_bwd = nn.softplus(self.param("s_delta_bwd", _s_delta_init(self.dt_min, self.dt_max), (D,)) + nn.Dense(D)(x_bwd))
         B_bwd = nn.Dense(N, use_bias=False)(x_bwd)  # (B, L', N)
@@ -96,9 +89,9 @@ class IntraModalBiMamba(nn.Module):
     dt_max: float = 1e-1
     n_layers: int = 1  # stacked BiMambaBlocks per feature type; layer 0 keeps the original name, so old checkpoints still load
 
-    # hiddens: dict{str: (B, L', C')} ; mask: (B, L') or None -> dict{str: (B, L', C')}
+    # hiddens: dict{str: (B, L', C')} -> dict{str: (B, L', C')}
     @nn.compact
-    def __call__(self, hiddens: dict[str, jax.Array], *, train: bool = True, mask: jax.Array | None = None) -> dict[str, jax.Array]:
+    def __call__(self, hiddens: dict[str, jax.Array], *, train: bool = True) -> dict[str, jax.Array]:
         # One BiMambaBlock per feature type, shared across roles - same weight-sharing logic as ModalityFrontend
         # sorted(set(...)) gives stable parameter creation order.
         feats = sorted(set(key.split(".", 1)[1] for key in hiddens))
@@ -113,7 +106,7 @@ class IntraModalBiMamba(nn.Module):
                     continue
                 x = hiddens[key]
                 for block in blocks:
-                    x = block(x, train=train, mask=mask)  # (B, L', C')
+                    x = block(x, train=train)  # (B, L', C')
                 u[key] = x
 
         return u

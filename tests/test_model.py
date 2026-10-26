@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import sys
 
 from pathlib import Path
@@ -19,13 +18,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from config import CORE_MODALITIES, EngageNetConfig
-from dataset import SLOW_PAD, _bin_means, pad_slow
 from model import EngageNet
 from read_data import ROLES, log
 
 
-def main(fusion_temporal: bool = False, intra_layers: int = 1, slow_path: bool = False, slow_center: bool = False) -> None:
-    cnfg = EngageNetConfig(active_modalities=CORE_MODALITIES, fusion_temporal=fusion_temporal, intra_layers=intra_layers, slow_path=slow_path, slow_center=slow_center)
+def main(fusion_temporal: bool = False, intra_layers: int = 1) -> None:
+    cnfg = EngageNetConfig(active_modalities=CORE_MODALITIES, fusion_temporal=fusion_temporal, intra_layers=intra_layers)
     M = len(cnfg.modality_names) * 2  # features x roles
     B, L = 2, cnfg.window_len
 
@@ -42,21 +40,6 @@ def main(fusion_temporal: bool = False, intra_layers: int = 1, slow_path: bool =
         for role in ROLES:
             key = f"{role}.{feat}"
             inputs[key] = jax.random.normal(jax.random.fold_in(rng_data, i), (B, c_in, L))
-
-    if slow_path:
-        # Two sessions of different length (13 and 40 bins); the window of row 0 starts near its end
-        T = [13 * cnfg.slow_bin - 7, 40 * cnfg.slow_bin]
-        windows = []
-        for b in range(B):
-            w = {"window_start": np.asarray([T[0] - L + 3, 500][b], np.int32)}
-            for i, feat in enumerate(cnfg.modality_names):
-                for role in ROLES:
-                    full = np.asarray(jax.random.normal(jax.random.fold_in(rng_data, 100 * b + i), (T[b], cnfg.input_dim(feat))))
-                    w[f"slow.{role}.{feat}"] = _bin_means(full, cnfg.slow_bin)
-            windows.append(w)
-        slow = pad_slow(windows)
-        assert slow["slow_mask"].shape == (B, SLOW_PAD) and slow["slow_mask"].sum(1).tolist() == [13, 40]
-        inputs.update({k: jnp.asarray(v) for k, v in slow.items()})
 
     model = EngageNet(cnfg=cnfg)
     variables = model.init(rng_init, inputs, tau=1.0, rng=rng_gumbel, train=False)
@@ -88,25 +71,10 @@ def main(fusion_temporal: bool = False, intra_layers: int = 1, slow_path: bool =
         assert (a > 1).all(), f"{k} alpha has values <= 1"
         assert (b > 1).all(), f"{k} beta has values <= 1"
 
-    if slow_path:
-        # Padding must not change anything: pad row 0 with 64 more bins of garbage and compare
-        padded = dict(inputs)
-        for k in inputs:
-            if k.startswith("slow."):
-                padded[k] = jnp.concatenate([inputs[k], 5.0 * jnp.ones((B, SLOW_PAD, inputs[k].shape[-1]))], axis=1)
-        padded["slow_mask"] = jnp.concatenate([inputs["slow_mask"], jnp.zeros((B, SLOW_PAD))], axis=1)
-        (mm2, _), _ = model.apply(variables, padded, tau=1.0, rng=rng_gumbel, train=False, mutable=["batch_stats"])
-        for role in ROLES:
-            diff = float(jnp.abs(mm2[role][0] - multimodal[role][0]).max())
-            assert diff < 1e-4, f"slow path depends on padding: {diff}"
-        log.info("slow path: output independent of padding")
-
-    log.info(f"Full model smoke-test passed (fusion_temporal={fusion_temporal}, intra_layers={intra_layers}, slow_path={slow_path})!")
+    log.info(f"Full model smoke-test passed (fusion_temporal={fusion_temporal}, intra_layers={intra_layers})!")
 
 
 if __name__ == "__main__":
     main()
     main(fusion_temporal=True)
     main(fusion_temporal=True, intra_layers=2)
-    main(fusion_temporal=True, slow_path=True)
-    main(fusion_temporal=True, slow_path=True, slow_center=True)

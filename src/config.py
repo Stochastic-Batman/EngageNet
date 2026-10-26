@@ -112,11 +112,6 @@ class EngageNetConfig:
     fusion_temporal: bool = False
     # Stacked intra-modal BiMamba blocks per feature type (1 = original)
     intra_layers: int = 1
-    # Two-rate model: a second path over the whole session in bins of slow_bin frames (2 s), its output concatenated to H
-    slow_path: bool = False
-    slow_bin: int = 50
-    slow_dim: int = 64
-    slow_center: bool = False  # subtract the session mean from the slow path's inputs and output (no per-session level)
 
     # Beta head
     beta_hidden: int = 128         # hidden layer width in BetaHead
@@ -200,10 +195,6 @@ class EngageNetConfig:
         parser.add_argument("--infer-tau", type=float, default=None)
         parser.add_argument("--fusion-temporal", action="store_true")
         parser.add_argument("--intra-layers", type=int, default=1)
-        parser.add_argument("--slow-path", action="store_true")
-        parser.add_argument("--slow-bin", type=int, default=50)
-        parser.add_argument("--slow-dim", type=int, default=64)
-        parser.add_argument("--slow-center", action="store_true")
         parser.add_argument("--beta-hidden", type=int, default=128)
         parser.add_argument("--checkpoint-dir", type=str, default=None)
         parser.add_argument("--lambda-ccc", type=float, default=1.0)
@@ -258,10 +249,6 @@ class EngageNetConfig:
             infer_tau=args.infer_tau,
             fusion_temporal=args.fusion_temporal,
             intra_layers=args.intra_layers,
-            slow_path=args.slow_path,
-            slow_bin=args.slow_bin,
-            slow_dim=args.slow_dim,
-            slow_center=args.slow_center,
             beta_hidden=args.beta_hidden,
             checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else cls.checkpoint_dir,
             lambda_ccc=args.lambda_ccc,
