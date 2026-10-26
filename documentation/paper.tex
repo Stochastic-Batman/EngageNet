@@ -755,6 +755,58 @@
 
 	On NoXi+J the temporal block raises the CCC by $0.043$; the difference stays significant after the Holm correction over the two corpora ($p = 0.012$), and each of the six seeds scores higher than the final model with the same seed. The gain comes from where the previous subsection located the error: the within-person correlation rises from $0.69$ to $0.75$. The mean of the six models reaches $0.729$ without rescaling, above the rescaled ensemble we submitted ($0.714$). On NoXi the block has no effect. This fits the variance split above: on NoXi+J three quarters of the label variance lie within a person, on NoXi only half. Both runs use the first implementation of the ordering layer (Section \ref{sec:fixedorder}). \textcolor{red}{Open: the rescaled ensemble and test predictions with these models.}
 
+	\subsection{Longer Windows}
+	\label{sec:longwindows}
+	Section \ref{sec:dynamics} found most of the within-person variance, and most of the missing score, in changes slower than the $10$ s window. We therefore lengthen the window. A $60$ s window has $1500$ frames and the stride is $750$; one extra window ending at the last frame covers the end of the session, which the regular stride would leave to the last predicted value. Memory grows with the number of frames per batch, so the batch shrinks from $8$ to $4$ windows ($2$ for $120$ s), and since an epoch then has fewer updates, training runs for up to $100$ epochs. All runs keep the temporal block after fusion (Section \ref{sec:fusiontemporal}). A control with $10$ s windows and batches of $4$ separates the effect of the window from that of the smaller batch.
+
+	\begin{center}
+	\small
+	\begin{tabular}{lcccc}
+		\toprule
+		& \multicolumn{2}{c}{\textbf{NoXi}} & \multicolumn{2}{c}{\textbf{NoXi+J}} \\
+		\textbf{Window, batch} & \textbf{Seeds} & \textbf{CCC} & \textbf{Seeds} & \textbf{CCC} \\
+		\midrule
+		$10$ s, $8$ (Section \ref{sec:fusiontemporal}) & $6$ & $0.724 \pm 0.014$ & $6$ & $0.684 \pm 0.024$ \\
+		$10$ s, $4$ & $3$ & $\mathbf{0.744 \pm 0.008}$ & $3$ & $0.700 \pm 0.012$ \\
+		$30$ s, $4$ & $3$ & $0.733 \pm 0.004$ & & \\
+		$60$ s, $4$ & $3$ & $0.693 \pm 0.044$ & $6$ & $\mathbf{0.728 \pm 0.016}$ \\
+		$60$ s, $4$, gradient norm clipped at $1$ & $3$ & $0.697 \pm 0.065$ & & \\
+		$120$ s, $2$ & & & $3$ & $0.735 \pm 0.025$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+
+	On NoXi+J the $60$ s window raises the CCC by $0.044$ over $10$ s windows ($p = 0.005$, Welch; $p = 0.0003$ paired by seed), and each of the six seeds scores higher. The smaller batch explains little of it: on the same three seeds the control with batches of $4$ stays $0.036$ below the $60$ s windows (paired $p = 0.012$). Doubling the window to $120$ s gives the same score ($-0.001$ on the same seeds).
+
+	To see where the gain comes from, we repeat the analysis of Section \ref{sec:dynamics} for the six single models with $10$ and with $60$ s windows on NoXi+J:
+
+	\begin{center}
+	\small
+	\begin{tabular}{lcc}
+		\toprule
+		\textbf{NoXi+J, mean over six single models} & \textbf{$10$ s} & \textbf{$60$ s} \\
+		\midrule
+		CCC with the true level & $0.747$ & $0.774$ \\
+		Pearson $r$ of the person means & $0.86$ & $0.89$ \\
+		Mean within-person Pearson $r$ & $0.68$ & $0.72$ \\
+		Band $r$: fast, $< 2$ s & $0.01$ & $0.02$ \\
+		Band $r$: mid, $2$ to $10$ s & $0.28$ & $0.32$ \\
+		Band $r$: slow, $10$ to $60$ s & $0.64$ & $0.66$ \\
+		Band $r$: very slow, $> 60$ s & $0.80$ & $\mathbf{0.84}$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+
+	Both parts improve: each person's level is placed better, and within a person the prediction follows the label more closely. Within a person the gain lies mainly in the very slow band, while the slow band from $10$ to $60$ s, which Section \ref{sec:dynamics} singled out, barely changes. A $60$ s window cannot resolve changes slower than itself either. Presumably it gives each window more evidence for the person's current level, and the overlapping windows, half a minute apart, then follow that level as it drifts over the session.
+
+	\textbf{Context at inference only.} The BiMamba blocks run on sequences of any length, so a model can be given more context at inference than it had in training. A model trained on $60$ s windows loses slightly on $120$ s windows ($-0.004$, six seeds, paired $p = 0.08$) and more on $300$ s windows ($-0.015$, five seeds, $p = 0.03$). A NoXi model trained on $10$ s windows (batches of $4$) scores the same on $60$ and $120$ s windows ($0.747$ and $0.745$, against $0.744$). The models stay stable on longer sequences but do not use context they were not trained on.
+
+	\textbf{NoXi.} On NoXi longer windows do not help. With $60$ s windows the scores of the seeds range from $0.65$ to $0.73$ and the validation score of some seeds swings from epoch to epoch; clipping the global gradient norm does not remove this (one seed oscillates between $0$ and $0.7$ for the whole run), and $30$ s windows are stable but no better than $10$ s ones. The control with $10$ s windows and batches of $4$ is the best NoXi configuration so far: $+0.019$ over batches of $8$ ($p = 0.03$, uncorrected) and $+0.013$ over the final model ($p = 0.21$). We have no explanation for the difference between the corpora; the bands of Section \ref{sec:dynamics} would have predicted a gain on NoXi as well, where the very slow band is followed worst.
+
+	\textbf{A two-rate model.} Since the models use only context they were trained on, we also gave them the whole session during training, at a low rate: a second path averages each stream over bins of $2$ s for the whole session (about $300$ to $600$ bins), passes it through its own projection, intra-modal BiMamba, inter-modal BiMamba (fixed order) and a BiMamba over time, and the heads read its output, interpolated at the frames of the window, next to $[H, z]$ ($+0.34$M parameters). With $10$ s windows it is neutral on NoXi+J ($0.693 \pm 0.028$, $+0.001$ against the same three seeds without it) and harmful on NoXi ($0.692 \pm 0.008$, $-0.040$, $p = 0.008$), where the validation score peaks after $2$ to $6$ epochs and then declines. A likely cause is a shortcut: the whole-session input identifies each training participant and lets the model memorise their level, which does not transfer to new participants. \textcolor{red}{Running: a variant that removes the session mean from the inputs and the output of the slow path, so that it can only move the prediction within a session.}
+
+	Longer windows are the largest single gain on NoXi+J: $0.728$ against $0.641$ for the final model ($+0.087$, $p < 10^{-5}$), and the mean of the six models reaches $0.775$ without rescaling, against $0.714$ for the rescaled ensemble we submitted. \textcolor{red}{Open: the rescaled ensemble and test predictions with the $60$ s models for NoXi+J and the $10$ s, batch $4$ models for NoXi.}
+
 	\subsection{Learned versus Fixed Modality Ordering}
 	\label{sec:fixedorder}
 	The ordering layer of Section \ref{sec:gumbel} is a contribution only if it does better than a fixed order. We trained the final configuration (core features plus text, mixed batches, full objective) with the meta-network removed and $P$ replaced by a constant permutation matrix, for four fixed orders of the $M = 10$ streams, with three seeds each ($95$, $1$, $2$), and compared each with the six seeds of the learned ordering by Welch's $t$-test, as in Section \ref{sec:features}. The four orders are: (i) role-blocked, the five streams of the expert followed by the five of the novice, feature types in alphabetical order (the order in which the code stacks the streams before $P$ is applied); (ii) role-interleaved, the expert and novice streams of each feature type next to each other; (iii) and (iv) two random orders, drawn once and kept fixed for all seeds. An order and its reverse are not both included: the forward and backward scans of the bidirectional block have the same structure and separately initialised parameters, so reversing the sequence only exchanges their roles.
