@@ -12,6 +12,17 @@ def ccc(predictions: np.ndarray, targets: np.ndarray) -> float:
     return float(2 * cov_pt / (var_p + var_t + (mu_p - mu_t) ** 2 + 1e-8))
 
 
+# p: (B, L) ; t: (B, L) -> scalar: Pearson r within each row (one window of one person), averaged with weights
+# proportional to the row's label std, so windows where the label barely moves count little
+def within_window_pearson(p: jnp.ndarray, t: jnp.ndarray, eps: float = 1e-6) -> jnp.ndarray:
+    pc = p - p.mean(-1, keepdims=True)
+    tc = t - t.mean(-1, keepdims=True)
+    sd_p = jnp.sqrt((pc ** 2).mean(-1) + eps)
+    sd_t = jnp.sqrt((tc ** 2).mean(-1))
+    r = (pc * tc).mean(-1) / (sd_p * (sd_t + eps))
+    return (sd_t * r).sum() / (sd_t.sum() + eps)
+
+
 # per_domain_cccs: dict{domain_name: ccc_value} -> scalar
 def combined_ccc(per_domain_cccs: dict[str, float]) -> float:
     return float(np.mean(list(per_domain_cccs.values())))

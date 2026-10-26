@@ -14,7 +14,7 @@ from pathlib import Path
 from beta_head import beta_nll_weights, nll_loss, predictive_mean
 from config import EngageNetConfig
 from data_loader import iter_batches
-from metrics import ccc_jnp, cdd_gender, cdd_language, ccc, fairness_penalty, pearson
+from metrics import ccc_jnp, cdd_gender, cdd_language, ccc, fairness_penalty, pearson, within_window_pearson
 from model import EngageNet
 from read_data import log, ROLES, read_scalar_annotation
 
@@ -42,8 +42,8 @@ def _drop_meta(batch: dict) -> dict[str, jax.Array]:
 
 
 # batch: dict{str: (B, C_i, L)} plus "{role}.engagement" (B, L') and "{role}.gender" (B,) -> (state, loss)
-@partial(jax.jit, static_argnames=("n_bins",))
-def train_step(state: TrainState, batch: dict[str, jax.Array], rng: jax.Array, tau: float, beta_w: float, lambda_ccc: float, lambda_uni: float, lambda_fair: float, n_bins: int = 10):
+@partial(jax.jit, static_argnames=("n_bins", "lambda_within"))
+def train_step(state: TrainState, batch: dict[str, jax.Array], rng: jax.Array, tau: float, beta_w: float, lambda_ccc: float, lambda_uni: float, lambda_fair: float, n_bins: int = 10, lambda_within: float = 0.0):
     targets = {r: batch[f"{r}.engagement"] for r in ROLES if f"{r}.engagement" in batch}
     groups = {r: batch.get(f"{r}.gender") for r in ROLES}
     stream_inputs = {k: v for k, v in batch.items() if not (k.endswith(".engagement") or k.endswith(".gender"))}
@@ -55,12 +55,15 @@ def train_step(state: TrainState, batch: dict[str, jax.Array], rng: jax.Array, t
         # 1. Per-frame fit: reweighted Beta NLL, one multimodal head per role
         loss = 0.0
         preds, tgts, grps = [], [], []
+        within = []
         for role, (a, b) in multimodal.items():
             if role not in targets:
                 continue
             y = targets[role]
             loss = loss + nll_loss(a, b, y, weights=beta_nll_weights(a, b, beta_w))
             preds.append(predictive_mean(a, b).reshape(-1))
+            if lambda_within:
+                within.append(within_window_pearson(predictive_mean(a, b), y))
             tgts.append(y.reshape(-1))
             g = groups[role] if groups[role] is not None else -jnp.ones(y.shape[0], jnp.int8)
             grps.append(jnp.broadcast_to(g[:, None], y.shape).reshape(-1))
@@ -72,6 +75,10 @@ def train_step(state: TrainState, batch: dict[str, jax.Array], rng: jax.Array, t
 
         # 2. Ordering: CCC over the pooled batch
         loss = loss + lambda_ccc * (1.0 - ccc_jnp(p, t))
+
+        # 2b. Within-person dynamics: the batch CCC mixes people, so it mostly rewards the level; this rewards following each window
+        if lambda_within:
+            loss = loss + lambda_within * (1.0 - sum(within) / len(within))
 
         # 3. Per-modality supervision: each head against its own role's target, normalised by M
         uni = 0.0
@@ -202,7 +209,7 @@ def main() -> None:
 
         for batch in iter_batches(cnfg, split="train", shuffle=True, seed=cnfg.seed + epoch):
             rng, rng_step = jax.random.split(rng)
-            state, loss = train_step(state, _drop_meta(batch), rng_step, tau, cnfg.beta_w, cnfg.lambda_ccc, cnfg.lambda_uni, cnfg.lambda_fair, cnfg.cdd_bins)
+            state, loss = train_step(state, _drop_meta(batch), rng_step, tau, cnfg.beta_w, cnfg.lambda_ccc, cnfg.lambda_uni, cnfg.lambda_fair, cnfg.cdd_bins, cnfg.lambda_within)
             epoch_loss += float(loss)
             n_batches += 1
 

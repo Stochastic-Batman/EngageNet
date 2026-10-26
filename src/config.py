@@ -76,6 +76,7 @@ class EngageNetConfig:
     lambda_ccc: float = 1.0        # weight of the ordering (CCC) term
     lambda_uni: float = 0.5        # per-modality supervision, divided by M internally
     lambda_fair: float = 0.05      # fairness penalty weight
+    lambda_within: float = 0.0     # weight of 1 - within-window Pearson r (per person); 0 = off (original)
     beta_w: float = 0.5            # likelihood reweighting exponent, kappa^{-beta_w}
     cdd_bins: int = 10             # ground-truth quantile bins for CDD and its penalty
     
@@ -200,6 +201,7 @@ class EngageNetConfig:
         parser.add_argument("--lambda-ccc", type=float, default=1.0)
         parser.add_argument("--lambda-uni", type=float, default=0.5)
         parser.add_argument("--lambda-fair", type=float, default=0.05)
+        parser.add_argument("--lambda-within", type=float, default=0.0)
         parser.add_argument("--beta-w", type=float, default=0.5)
         parser.add_argument("--cdd-bins", type=int, default=10)
         parser.add_argument("--dt-min", type=float, default=1e-3)
@@ -254,6 +256,7 @@ class EngageNetConfig:
             lambda_ccc=args.lambda_ccc,
             lambda_uni=args.lambda_uni,
             lambda_fair=args.lambda_fair,
+            lambda_within=args.lambda_within,
             beta_w=args.beta_w,
             cdd_bins=args.cdd_bins,
             dt_min=args.dt_min,
