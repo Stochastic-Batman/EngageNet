@@ -63,7 +63,7 @@ class SlowPath(nn.Module):
                     hiddens[key] = proj(session_centre(x) if cnfg.slow_center else x)  # (B, S, C_s)
 
         u = IntraModalBiMamba(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.conv_kernel, dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="intra_modal")(hiddens, train=train, mask=mask)
-        # Order of the streams has no measurable effect (Section 4.8), so the slow path uses a fixed one
+        # Order of the streams has no measurable effect (Section 4.9), so the slow path uses a fixed one
         H = InterModalBiMamba(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.cross_modal_conv_kernel, fixed_order="blocked", dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="inter_modal")(u, train=train)  # (B, S, MC_s)
         s = BiMambaBlock(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.conv_kernel, dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="temporal")(nn.Dense(C, name="fusion_proj")(H), train=train, mask=mask)  # (B, S, C_s)
 

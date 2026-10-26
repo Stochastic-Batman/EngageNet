@@ -753,7 +753,7 @@
 	\end{tabular}
 	\end{center}
 
-	On NoXi+J the temporal block raises the CCC by $0.043$; the difference stays significant after the Holm correction over the two corpora ($p = 0.012$), and each of the six seeds scores higher than the final model with the same seed. The gain comes from where the previous subsection located the error: the within-person correlation rises from $0.69$ to $0.75$. The mean of the six models reaches $0.729$ without rescaling, above the rescaled ensemble we submitted ($0.714$). On NoXi the block has no effect. This fits the variance split above: on NoXi+J three quarters of the label variance lie within a person, on NoXi only half. Both runs use the first implementation of the ordering layer (Section \ref{sec:fixedorder}). \textcolor{red}{Open: the rescaled ensemble and test predictions with these models.}
+	On NoXi+J the temporal block raises the CCC by $0.043$; the difference stays significant after the Holm correction over the two corpora ($p = 0.012$), and each of the six seeds scores higher than the final model with the same seed. The gain comes from where the previous subsection located the error: the within-person correlation rises from $0.69$ to $0.75$. The mean of the six models reaches $0.729$ without rescaling, above the rescaled ensemble we submitted ($0.714$). On NoXi the block has no effect. This fits the variance split above: on NoXi+J three quarters of the label variance lie within a person, on NoXi only half. Both runs use the first implementation of the ordering layer (Section \ref{sec:fixedorder}). The ensembles and the new test predictions use the longer windows of Section \ref{sec:longwindows} instead.
 
 	\subsection{Longer Windows}
 	\label{sec:longwindows}
@@ -767,7 +767,7 @@
 		\textbf{Window, batch} & \textbf{Seeds} & \textbf{CCC} & \textbf{Seeds} & \textbf{CCC} \\
 		\midrule
 		$10$ s, $8$ (Section \ref{sec:fusiontemporal}) & $6$ & $0.724 \pm 0.014$ & $6$ & $0.684 \pm 0.024$ \\
-		$10$ s, $4$ & $3$ & $\mathbf{0.744 \pm 0.008}$ & $3$ & $0.700 \pm 0.012$ \\
+		$10$ s, $4$ & $6$ & $\mathbf{0.746 \pm 0.008}$ & $3$ & $0.700 \pm 0.012$ \\
 		$30$ s, $4$ & $3$ & $0.733 \pm 0.004$ & & \\
 		$60$ s, $4$ & $3$ & $0.693 \pm 0.044$ & $6$ & $\mathbf{0.728 \pm 0.016}$ \\
 		$60$ s, $4$, gradient norm clipped at $1$ & $3$ & $0.697 \pm 0.065$ & & \\
@@ -799,13 +799,13 @@
 
 	Both parts improve: each person's level is placed better, and within a person the prediction follows the label more closely. Within a person the gain lies mainly in the very slow band, while the slow band from $10$ to $60$ s, which Section \ref{sec:dynamics} singled out, barely changes. A $60$ s window cannot resolve changes slower than itself either. Presumably it gives each window more evidence for the person's current level, and the overlapping windows, half a minute apart, then follow that level as it drifts over the session.
 
-	\textbf{Context at inference only.} The BiMamba blocks run on sequences of any length, so a model can be given more context at inference than it had in training. A model trained on $60$ s windows loses slightly on $120$ s windows ($-0.004$, six seeds, paired $p = 0.08$) and more on $300$ s windows ($-0.015$, five seeds, $p = 0.03$). A NoXi model trained on $10$ s windows (batches of $4$) scores the same on $60$ and $120$ s windows ($0.747$ and $0.745$, against $0.744$). The models stay stable on longer sequences but do not use context they were not trained on.
+	\textbf{Context at inference only.} The BiMamba blocks run on sequences of any length, so a model can be given more context at inference than it had in training. A model trained on $60$ s windows loses slightly on $120$ s windows ($-0.004$, six seeds, paired $p = 0.08$) and more on $300$ s windows ($-0.015$, five seeds, $p = 0.03$). A NoXi model trained on $10$ s windows (batches of $4$, three seeds) scores the same on $60$ and $120$ s windows ($0.747$ and $0.745$, against $0.744$). The models stay stable on longer sequences but do not use context they were not trained on.
 
-	\textbf{NoXi.} On NoXi longer windows do not help. With $60$ s windows the scores of the seeds range from $0.65$ to $0.73$ and the validation score of some seeds swings from epoch to epoch; clipping the global gradient norm does not remove this (one seed oscillates between $0$ and $0.7$ for the whole run), and $30$ s windows are stable but no better than $10$ s ones. The control with $10$ s windows and batches of $4$ is the best NoXi configuration so far: $+0.019$ over batches of $8$ ($p = 0.03$, uncorrected) and $+0.013$ over the final model ($p = 0.21$). We have no explanation for the difference between the corpora; the bands of Section \ref{sec:dynamics} would have predicted a gain on NoXi as well, where the very slow band is followed worst.
+	\textbf{NoXi.} On NoXi longer windows do not help. With $60$ s windows the scores of the seeds range from $0.65$ to $0.73$ and the validation score of some seeds swings from epoch to epoch; clipping the global gradient norm does not remove this (one seed oscillates between $0$ and $0.7$ for the whole run), and $30$ s windows are stable but no better than $10$ s ones. The control with $10$ s windows and batches of $4$ is the best NoXi configuration so far: $+0.022$ over batches of $8$ ($p = 0.010$, six seeds each, every seed higher) and $+0.015$ over the final model ($p = 0.14$). We have no explanation for the difference between the corpora; the bands of Section \ref{sec:dynamics} would have predicted a gain on NoXi as well, where the very slow band is followed worst.
 
-	\textbf{A two-rate model.} Since the models use only context they were trained on, we also gave them the whole session during training, at a low rate: a second path averages each stream over bins of $2$ s for the whole session (about $300$ to $600$ bins), passes it through its own projection, intra-modal BiMamba, inter-modal BiMamba (fixed order) and a BiMamba over time, and the heads read its output, interpolated at the frames of the window, next to $[H, z]$ ($+0.34$M parameters). With $10$ s windows it is neutral on NoXi+J ($0.693 \pm 0.028$, $+0.001$ against the same three seeds without it) and harmful on NoXi ($0.692 \pm 0.008$, $-0.040$, $p = 0.008$), where the validation score peaks after $2$ to $6$ epochs and then declines. A likely cause is a shortcut: the whole-session input identifies each training participant and lets the model memorise their level, which does not transfer to new participants. \textcolor{red}{Running: a variant that removes the session mean from the inputs and the output of the slow path, so that it can only move the prediction within a session.}
+	\textbf{A two-rate model.} Since the models use only context they were trained on, we also gave them the whole session during training, at a low rate: a second path averages each stream over bins of $2$ s for the whole session (about $300$ to $600$ bins), passes it through its own projection, intra-modal BiMamba, inter-modal BiMamba (fixed order) and a BiMamba over time, and the heads read its output, interpolated at the frames of the window, next to $[H, z]$ ($+0.34$M parameters). With $10$ s windows it is neutral on NoXi+J ($0.693 \pm 0.028$, $+0.001$ against the same three seeds without it) and harmful on NoXi ($0.692 \pm 0.008$, $-0.040$, $p = 0.008$), where the validation score peaks after $2$ to $6$ epochs and then declines. A likely cause is a shortcut: the whole-session input identifies each training participant and lets the model memorise their level, which does not transfer to new participants. Removing the session mean from the inputs and the output of the slow path, so that it can only move the prediction within a session, does not help: it makes the model worse on both corpora ($0.662 \pm 0.028$ on NoXi and $0.671 \pm 0.021$ on NoXi+J, $-0.070$ and $-0.022$ against the same three seeds without the slow path). Either the shortcut does not run through the session mean alone, or the slow path hurts for another reason; we have not separated the two. The whole-session path is a negative result.
 
-	Longer windows are the largest single gain on NoXi+J: $0.728$ against $0.641$ for the final model ($+0.087$, $p < 10^{-5}$), and the mean of the six models reaches $0.775$ without rescaling, against $0.714$ for the rescaled ensemble we submitted. \textcolor{red}{Open: the rescaled ensemble and test predictions with the $60$ s models for NoXi+J and the $10$ s, batch $4$ models for NoXi.}
+	Longer windows are the largest single gain on NoXi+J: $0.728$ against $0.641$ for the final model ($+0.087$, $p < 10^{-5}$), and the mean of the six models reaches $0.775$ without rescaling, against $0.714$ for the rescaled ensemble we submitted. The second submission uses the rescaled six-seed ensembles of the $60$ s models on NoXi+J ($0.787$ on validation, against $0.714$ before) and of the $10$ s, batch $4$ models on NoXi ($0.766$, against $0.758$).
 
 	\subsection{Learned versus Fixed Modality Ordering}
 	\label{sec:fixedorder}
@@ -999,7 +999,10 @@
 		Single model, single-session batches, core features (3 seeds) & $0.709$ & $0.529$ \\
 		+ mixed-session batches (Section \ref{sec:batches}, 3 seeds) & $0.724$ & $0.599$ \\
 		+ text stream (Section \ref{sec:features}, 6 seeds) & $0.731$ & $0.641$ \\
-		Six-seed ensemble, rescaled (submitted system) & $\mathbf{0.758}$ & $\mathbf{0.714}$ \\
+		+ temporal block after fusion (Section \ref{sec:fusiontemporal}, 6 seeds) & $0.724$ & $0.684$ \\
+		+ NoXi: batches of $4$; NoXi+J: $60$ s windows (Section \ref{sec:longwindows}) & $0.746$ & $0.728$ \\
+		Six-seed ensemble of row 3, rescaled (first submission) & $0.758$ & $0.714$ \\
+		Six-seed ensemble of row 5, rescaled (second submission) & $\mathbf{0.766}$ & $\mathbf{0.787}$ \\
 		\midrule
 		\multicolumn{3}{l}{\textit{For reference, MultiMediate'26 test leaderboard}} \\
 		Official baseline & $0.55$ & $0.31$ \\
@@ -1007,7 +1010,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{center}
-	Our numbers are on the validation split and the leaderboard's on the test split, so the comparison is indicative only. The submitted test predictions (NoXi test-base and test-additional, NoXi+J test) are produced by the same rescaled six-seed ensemble.
+	Our numbers are on the validation split and the leaderboard's on the test split, so the comparison is indicative only. The test predictions of each submission (NoXi test-base and test-additional, NoXi+J test) are produced by the corresponding rescaled six-seed ensemble.
 
 
 	\newpage
