@@ -334,6 +334,6 @@ docker run --gpus all -v /path/to/data:/app/data -v /path/to/models:/app/models 
 
 ## Contributors
 
-- **Research Team:** Lado Turmanidze, Luka Javakhisvhili, Mariam Gadelia, Keso Chikhladze
+- **Research Team:** Lado Turmanidze
 - **Supervisors:** Dr. Philipp Müller, Beso Mikaberidze
 - **Institution:** Georgian Artificial Intelligence Association (GAIA)

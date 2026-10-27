@@ -116,6 +116,8 @@ class EngageNetConfig:
 
     # Beta head
     beta_hidden: int = 128         # hidden layer width in BetaHead
+    dropout: float = 0.0           # dropout rate in the Beta heads (training; and at inference with mc_samples); 0 = none (original)
+    mc_samples: int = 0            # inference: stochastic dropout passes T; 0 = one deterministic pass (original)
     
     # The specs for only the active modalities (filters modality_specs by active_modalities)
     @property
@@ -198,6 +200,8 @@ class EngageNetConfig:
         parser.add_argument("--fusion-temporal", action="store_true")
         parser.add_argument("--intra-layers", type=int, default=1)
         parser.add_argument("--beta-hidden", type=int, default=128)
+        parser.add_argument("--dropout", type=float, default=0.0)
+        parser.add_argument("--mc-samples", type=int, default=0)
         parser.add_argument("--checkpoint-dir", type=str, default=None)
         parser.add_argument("--lambda-ccc", type=float, default=1.0)
         parser.add_argument("--lambda-uni", type=float, default=0.5)
@@ -253,6 +257,8 @@ class EngageNetConfig:
             fusion_temporal=args.fusion_temporal,
             intra_layers=args.intra_layers,
             beta_hidden=args.beta_hidden,
+            dropout=args.dropout,
+            mc_samples=args.mc_samples,
             checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else cls.checkpoint_dir,
             lambda_ccc=args.lambda_ccc,
             lambda_uni=args.lambda_uni,

@@ -41,11 +41,17 @@ def beta_nll_weights(alpha: jax.Array, beta: jax.Array, beta_w: float) -> jax.Ar
 
 class BetaHead(nn.Module):
     hidden_dim: int = 128
+    dropout: float = 0.0  # rate before both Dense layers; active only when a "dropout" rng is passed (training, MC inference)
 
     # y: (B, ..., D) -> (alpha: (B, ...), beta: (B, ...))
     @nn.compact
     def __call__(self, y: jax.Array) -> tuple[jax.Array, jax.Array]:
+        stochastic = self.dropout > 0 and self.has_rng("dropout")
+        if self.dropout > 0:
+            y = nn.Dropout(rate=self.dropout, deterministic=not stochastic)(y)
         y_proj = nn.silu(nn.Dense(features=self.hidden_dim)(y))
+        if self.dropout > 0:
+            y_proj = nn.Dropout(rate=self.dropout, deterministic=not stochastic)(y_proj)
 
         alpha_logit = nn.Dense(features=1)(y_proj)
         beta_logit = nn.Dense(features=1)(y_proj)
@@ -57,19 +63,20 @@ class BetaHead(nn.Module):
 
 class MultiHeadBeta(nn.Module):
     hidden_dim: int = 128
+    dropout: float = 0.0
 
     # fused: (B, L', MC') ; per_modality: dict{"{role}.{feat}": (B, L', C')}
     # -> (multimodal: dict{role: (alpha, beta)}, unimodal: dict{"{role}.{feat}": (alpha, beta)})
     @nn.compact
     def __call__(self, fused: jax.Array, per_modality: dict[str, jax.Array]) -> tuple[dict[str, tuple[jax.Array, jax.Array]], dict[str, tuple[jax.Array, jax.Array]]]:
         # One multimodal head per role, both reading the same fused representation
-        multimodal = {role: BetaHead(hidden_dim=self.hidden_dim, name=f"multi_head_{role}")(fused) for role in ROLES}
+        multimodal = {role: BetaHead(hidden_dim=self.hidden_dim, dropout=self.dropout, name=f"multi_head_{role}")(fused) for role in ROLES}
 
         feats = sorted(set(key.split(".", 1)[1] for key in per_modality))
         unimodal: dict[str, tuple[jax.Array, jax.Array]] = {}
 
         for feat in feats:
-            head = BetaHead(hidden_dim=self.hidden_dim, name=f"uni_head_{feat.replace('.', '_')}")
+            head = BetaHead(hidden_dim=self.hidden_dim, dropout=self.dropout, name=f"uni_head_{feat.replace('.', '_')}")
             for key in sorted(per_modality):
                 if key.split(".", 1)[1] == feat:
                     unimodal[key] = head(per_modality[key])

@@ -31,6 +31,6 @@ class EngageNet(nn.Module):
             z = BiMambaBlock(D=C, N=cnfg.ssm_state_dim, D_C=cnfg.conv_kernel, dt_min=cnfg.dt_min, dt_max=cnfg.dt_max, name="fusion_temporal")(nn.Dense(C, name="fusion_proj")(H), train=train)  # (B, L', C')
             H = jnp.concatenate([H, z], axis=-1)  # (B, L', MC' + C')
 
-        multimodal, unimodal = MultiHeadBeta(hidden_dim=cnfg.beta_hidden, name="beta_heads")(H, u)  # (dict{role: (alpha, beta)}, dict{"{role}.{feat}": (alpha, beta)})
+        multimodal, unimodal = MultiHeadBeta(hidden_dim=cnfg.beta_hidden, dropout=cnfg.dropout, name="beta_heads")(H, u)  # (dict{role: (alpha, beta)}, dict{"{role}.{feat}": (alpha, beta)})
 
         return multimodal, unimodal

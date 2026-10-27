@@ -8,7 +8,7 @@ import optax
 
 from jax.scipy.special import betaln, digamma
 
-from beta_head import nll_loss, predictive_mean, predictive_variance
+from beta_head import nll_loss, predictive_mean
 from read_data import ROLES, log
 
 
@@ -24,10 +24,11 @@ def select_windows(u_multi: jax.Array, u_uni: jax.Array, *, multi_pct: float = 0
     return (u_multi < multi_thresh) & (u_uni > uni_thresh)
 
 
-# multimodal: dict{role: (alpha, beta)} each (B, L') -> (B,)
-def window_uncertainty(heads: dict[str, tuple[jax.Array, jax.Array]]) -> jax.Array:
-    """Mean per-frame Beta variance, averaged over time and over heads -> one scalar per window."""
-    return jnp.stack([predictive_variance(a, b).mean(axis=-1) for a, b in heads.values()], axis=0).mean(axis=0)
+# heads: dict{key: (mean, variance)} each (B, L') -> (B,)
+def window_variance(heads: dict[str, tuple[jax.Array, jax.Array]]) -> jax.Array:
+    """Mean per-frame predictive variance, averaged over time and over heads -> one scalar per window.
+    The variance is the Beta variance (method 1) or, with MC dropout, the total variance (method 3); see inference.predict_batch."""
+    return jnp.stack([var.mean(axis=-1) for _mu, var in heads.values()], axis=0).mean(axis=0)
 
 
 def beta_kl(a1: jax.Array, b1: jax.Array, a2: jax.Array, b2: jax.Array) -> jax.Array:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 import jax
 import jax.numpy as jnp
@@ -13,13 +14,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aggregator import aggregate_windows
-from beta_head import predictive_mean
+from beta_head import predictive_mean, predictive_variance
 from config import EngageNetConfig
 from dataset import EngageNetDataset
 from model import EngageNet
 from read_data import ROLES, load_session, log
 from train import TrainState, create_train_state
-from tta import count_adapted, make_tta_tx, select_windows, tta_step, window_uncertainty
+from tta import count_adapted, make_tta_tx, select_windows, tta_step, window_variance
 
 
 # Default targets the challenge submission (test has no labels, so evaluate.py
@@ -56,11 +57,31 @@ def resolve_tau(cnfg: EngageNetConfig) -> float:
 TTA_MIN_BATCH = 4
 
 
-@jax.jit
-def predict_batch(state: TrainState, stream_inputs: dict[str, jax.Array], tau: float):
+# -> (multimodal: dict{role: (mean, variance)}, unimodal: dict{"{role}.{feat}": (mean, variance)}), each (B, L')
+# mc_samples = 0: one deterministic pass, Beta mean and variance (uncertainty method 1).
+# mc_samples = T > 0: T passes with dropout on (BatchNorm stays in eval mode); mean of the T means, and the total variance of
+# the mixture = mean of the T Beta variances (aleatoric) + variance of the T means (epistemic) (method 3).
+@functools.partial(jax.jit, static_argnames=("mc_samples",))
+def predict_batch(state: TrainState, stream_inputs: dict[str, jax.Array], tau: float, mc_samples: int = 0, rng: jax.Array | None = None):
     variables = {"params": state.params, "batch_stats": state.batch_stats}
-    (multimodal, unimodal), _ = state.apply_fn(variables, stream_inputs, tau=tau, rng=None, train=False, mutable=["batch_stats"])
-    return multimodal, unimodal
+
+    def moments(heads):
+        return {k: (predictive_mean(a, b), predictive_variance(a, b)) for k, (a, b) in heads.items()}
+
+    if mc_samples == 0:
+        (multimodal, unimodal), _ = state.apply_fn(variables, stream_inputs, tau=tau, rng=None, train=False, mutable=["batch_stats"])
+        return moments(multimodal), moments(unimodal)
+
+    def one_pass(key):
+        (multimodal, unimodal), _ = state.apply_fn(variables, stream_inputs, tau=tau, rng=None, train=False, mutable=["batch_stats"], rngs={"dropout": key})
+        return moments(multimodal), moments(unimodal)
+
+    passes = jax.lax.map(one_pass, jax.random.split(rng, mc_samples))  # every leaf gets a leading axis of length T
+
+    def total(heads):
+        return {k: (mu.mean(0), var.mean(0) + mu.var(0)) for k, (mu, var) in heads.items()}
+
+    return total(passes[0]), total(passes[1])
 
 
 def _stack(windows: list[dict]) -> dict[str, jax.Array]:
@@ -94,17 +115,21 @@ def _run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, tt
     stats = {"windows": 0, "selected": 0, "steps": 0}
     st = tta_state
     tau = cnfg.tau_min if tau is None else tau
+    mc_key = jax.random.PRNGKey(cnfg.seed)
+    n_batches = 0
 
     def flush(buf: list[dict]) -> None:
-        nonlocal st
+        nonlocal st, n_batches
         inputs = _stack(buf)
+        key = jax.random.fold_in(mc_key, n_batches)  # dropout masks of the MC passes (unused without --mc-samples)
+        n_batches += 1
 
         if st is not None and len(buf) >= TTA_MIN_BATCH:
-            multimodal, unimodal = predict_batch(st, inputs, tau)
+            multimodal, unimodal = predict_batch(st, inputs, tau, cnfg.mc_samples, key)
             if roles is not None:
                 multimodal = {r: multimodal[r] for r in roles}
                 unimodal = {k: v for k, v in unimodal.items() if k.split(".", 1)[0] in roles}
-            mask = select_windows(window_uncertainty(multimodal), window_uncertainty(unimodal), multi_pct=cnfg.tta_multi_pct, uni_pct=cnfg.tta_uni_pct)
+            mask = select_windows(window_variance(multimodal), window_variance(unimodal), multi_pct=cnfg.tta_multi_pct, uni_pct=cnfg.tta_uni_pct)
             n_sel = int(mask.sum())
             if n_sel > 0:
                 st, _loss = tta_step(st, inputs, mask, tau, lam=cnfg.tta_lambda, roles=roles)
@@ -112,10 +137,9 @@ def _run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, tt
                 stats["steps"] += 1
 
         # Predictions always come from AFTER the update, in eval mode
-        multimodal, _ = predict_batch(st if st is not None else state, inputs, tau)
+        multimodal, _ = predict_batch(st if st is not None else state, inputs, tau, cnfg.mc_samples, jax.random.fold_in(key, 1))
         for role in ROLES:
-            a, b = multimodal[role]
-            means = np.asarray(predictive_mean(a, b))  # (B, L')
+            means = np.asarray(multimodal[role][0])  # (B, L')
             window_preds[role].extend(list(means))
         stats["windows"] += len(buf)
 
@@ -160,6 +184,10 @@ def main():
 
     tau = resolve_tau(cnfg)
     log.info(f"Inference temperature tau = {tau:.4f}")
+    if cnfg.mc_samples > 0:
+        if cnfg.dropout <= 0:
+            raise SystemExit("--mc-samples needs a model trained with --dropout > 0 (and the same --dropout at inference)")
+        log.info(f"MC dropout: {cnfg.mc_samples} passes at rate {cnfg.dropout}; predictions are the mean of the passes, the TTA filter uses the total variance")
 
     tta_template = None
     if cnfg.tta:

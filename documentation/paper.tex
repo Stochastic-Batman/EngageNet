@@ -13,7 +13,9 @@
 \begin{document}
 	
 	\title{\textbf{EngageNet: Multi-Modal Engagement Regression with Ordered State-Space Fusion}}
-	\author{Lado Turmanidze}
+	\author{Lado Turmanidze\\ \small Georgian Artificial Intelligence Association (GAIA), Tbilisi, Georgia\\ \small \texttt{StochasticBatman@proton.me}
+	\and Philipp M\"uller\\ \small Max Planck Institute for Intelligent Systems, Stuttgart, Germany\\ \small \texttt{phmueller@is.mpg.de}
+	\and Beso Mikaberidze\\ \small Muskhelishvili Institute of Computational Mathematics (MICM),\\ \small Georgian Technical University, Tbilisi, Georgia\\ \small \texttt{beso.mikaberidze@gmail.com}}
 	\date{\today}
 	\maketitle
 	
@@ -322,9 +324,9 @@
 		It captures both kinds because the law of total variance splits the variance of the mixture of the $T$ predicted distributions exactly into these two parts. The decomposition is mainly used as a diagnostic to monitor whether the shift is mostly epistemic.
 	\end{enumerate}
 	
-	In the implemented filter, $U(x)$ is always the first quantity, the parametric Beta variance. The law of total variance guarantees that $U_{\text{total}}$ is the correct variance of the mixture distribution induced by MC dropout.
+	In the filter, $U(x)$ is the first quantity, the parametric Beta variance, unless MC dropout is used (below); then it is $U_{\text{total}}$. The law of total variance guarantees that $U_{\text{total}}$ is the correct variance of the mixture distribution induced by MC dropout.
 	
-	\textcolor{red}{\textbf{Implementation status.} The current architecture contains no dropout layers, so methods 2 and 3 cannot be evaluated as written: with deterministic weights, every one of the $T$ forward passes returns the identical Beta distribution and $U_{\text{epi}} \equiv 0$. Realising them requires inserting dropout into the Beta heads (and optionally the BiMamba projections) and retaining it at inference. Until then, methods 2 and 3 should be read as a planned extension rather than a component of the reported system. They are deferred: adaptation is first re-tested on the data of a single participant (Section \ref{sec:ttaresults}), and only if it still does not improve the predictions there will they be implemented, probably starting directly with method 3.}
+	\textbf{Implementation.} Dropout with rate $p$ sits before both dense layers of every Beta head, multimodal and unimodal; the rest of the network is unchanged, and without dropout the model is exactly the one described above. At inference, $T$ passes are run with dropout active and batch normalisation in evaluation mode; the prediction is then the mean $\bar\mu(x)$ of the $T$ means, and the filter uses $U_{\text{total}}$ (method 3). With a single deterministic pass the filter uses method 1, as in all earlier runs. \textcolor{red}{Results: Section \ref{sec:ttaresults}, pending.}
 	
 	\subsection{Training Objective}
 	\label{sec:objective}
@@ -968,7 +970,24 @@
 
 	The row "No adaptation" is the trained model on its own. Within its corpus it generalises to the unseen validation sessions as expected ($0.53$ on NoXi+J); across corpora it fails ($0.09$), for the label-scale reason of the previous subsection. Adaptation does not change this picture. No setting changes the cross-corpus score by more than $0.004$. In-corpus, the smaller learning rate is neutral within seed noise ($+0.004$) and the larger one is harmful ($-0.05$ to $-0.11$). At the design quantiles $(0.3, 0.7)$ the filter selects only $2$ to $6\%$ of the windows, far below the $9\%$ that two independent conditions of $30\%$ each would give; presumably the fused and the unimodal uncertainties tend to rise and fall together, which makes the joint condition rare, although we have not measured this correlation. Taken together with the previous subsection, the result is a clear negative one: in its current form the adaptation neither closes the cross-corpus gap, which lies in the label scale, nor improves in-corpus predictions, and with a larger learning rate it makes them worse. All other results in this document are obtained without it.
 
-	\textcolor{red}{\textbf{Next: adaptation on a single person.} In the runs above, the stream being adapted to is a whole session, and the sessions of a split come from many participants. The shift the adaptation meets is therefore a mixture of differences between persons and between corpora, and the latter is dominated by the label scale, which the adaptation, having no labels, cannot observe. We will next run it on the data of one participant at a time: only that person's multimodal and unimodal uncertainties enter the filter, only that person's heads provide the loss, the parameters are reset when the participant changes, and the effect is measured on that participant's frames against the unadapted model. If adaptation does not help there either, the uncertainty estimates of methods 2 and 3 (Section \ref{sec:uncertainty}) will replace the parametric variance in the filter.}
+	\textbf{Adaptation on a single person.} In the runs above, the stream being adapted to is a whole session, and the sessions of a split come from many participants, so the shift the adaptation meets mixes differences between persons with the label scale of the corpus, which an adaptation without labels cannot observe. We therefore also ran it on one participant at a time: for each session and each role, the adaptation starts again from the trained model, only that person's multimodal and unimodal uncertainties enter the filter, only that person's heads provide the loss, and only that person's predictions are kept. Both variants were run in-corpus on the best models of Section \ref{sec:longwindows} ($10$ s windows with batches of $4$ on NoXi, $60$ s windows on NoXi+J), three seeds each, and compared with the same seeds without adaptation; ``improved'' counts the $20$ people of each validation split whose own CCC, averaged over the seeds, rises.
+
+	\begin{center}
+	\small
+	\begin{tabular}{lcccc}
+		\toprule
+		& \multicolumn{2}{c}{\textbf{NoXi}} & \multicolumn{2}{c}{\textbf{NoXi+J}} \\
+		\textbf{Adapted to, setting} $(q_m, q_u, \eta_{\text{TTA}})$ & $\Delta$ \textbf{CCC} & \textbf{improved} & $\Delta$ \textbf{CCC} & \textbf{improved} \\
+		\midrule
+		Session, $(0.3,\ 0.7,\ 10^{-4})$ & $-0.001$ & $9/20$ & $-0.000$ & $3/20$ \\
+		Person, $(0.3,\ 0.7,\ 10^{-4})$ & $-0.002$ & $11/20$ & $-0.001$ & $6/20$ \\
+		Person, $(0.5,\ 0.5,\ 10^{-3})$ & $-0.022$ & $8/20$ & $-0.208$ & $3/20$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+	{\footnotesize $\Delta$ CCC: change of the pooled CCC, mean over the three seeds (unadapted: $0.744$ on NoXi, $0.736$ on NoXi+J).}
+
+	Adapting to one person behaves like adapting to a session. With the design setting the filter selects $4$ to $8\%$ of the windows, and the predictions barely move: no person's CCC changes by more than $0.015$, and the changes over people are not different from zero (Wilcoxon signed-rank, $p = 0.62$ on NoXi and $0.10$ on NoXi+J). With the larger learning rate and quantiles of $0.5$, which select about $16\%$ of the windows, the adaptation is harmful, mildly on NoXi and strongly on NoXi+J ($p < 0.001$), where single people lose up to $0.54$. Restricting the adaptation to one person therefore does not change the earlier result. A likely reason lies in the loss: its target is the model's own fused prediction, so an update can only pull the unimodal heads and the adapted layers towards what the model already predicts, and it carries no information about the person that the model does not have. \textcolor{red}{Next, as decided: the uncertainty estimate of method 3 (Section \ref{sec:uncertainty}) in the filter; it requires dropout layers and retraining.}
 
 	\subsection{Ensembling}
 	For each corpus we average, frame by frame, the predictions of the six seeds of the final configuration (core features plus text, mixed batches, full objective, $10$ s windows). Every member is trained on the training split only, and all six are used; no member is chosen by its validation score, since selecting the best single run would mostly select the luckiest seed.

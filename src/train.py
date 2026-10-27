@@ -50,7 +50,8 @@ def train_step(state: TrainState, batch: dict[str, jax.Array], rng: jax.Array, t
 
     def loss_fn(params):
         variables = {"params": params, "batch_stats": state.batch_stats}
-        (multimodal, unimodal), updates = state.apply_fn(variables, stream_inputs, tau=tau, rng=rng, train=True, mutable=["batch_stats"])
+        # The dropout rng only matters with --dropout > 0; the Gumbel noise keeps using `rng` itself
+        (multimodal, unimodal), updates = state.apply_fn(variables, stream_inputs, tau=tau, rng=rng, train=True, mutable=["batch_stats"], rngs={"dropout": jax.random.fold_in(rng, 1)})
 
         # 1. Per-frame fit: reweighted Beta NLL, one multimodal head per role
         loss = 0.0
