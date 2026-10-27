@@ -76,7 +76,6 @@ class EngageNetConfig:
     lambda_ccc: float = 1.0        # weight of the ordering (CCC) term
     lambda_uni: float = 0.5        # per-modality supervision, divided by M internally
     lambda_fair: float = 0.05      # fairness penalty weight
-    lambda_within: float = 0.0     # weight of 1 - within-window Pearson r (per person); 0 = off (original)
     beta_w: float = 0.5            # likelihood reweighting exponent, kappa^{-beta_w}
     cdd_bins: int = 10             # ground-truth quantile bins for CDD and its penalty
     
@@ -91,6 +90,7 @@ class EngageNetConfig:
     tta_lambda: float = 1.0        # weight of the pseudo-label NLL term in the TTA loss
     tta_multi_pct: float = 0.3     # keep windows whose fused-head uncertainty is below this batch quantile
     tta_uni_pct: float = 0.7       # ...and whose single-stream uncertainty is above this batch quantile
+    tta_person: bool = False       # adapt to one person at a time: per role, that role's heads only, reset per role (False = per session)
 
     # SSM / BiMamba
     ssm_state_dim: int = 16        # N - state dimension in selective SSM
@@ -184,6 +184,7 @@ class EngageNetConfig:
         parser.add_argument("--tta-lambda", type=float, default=1.0)
         parser.add_argument("--tta-multi-pct", type=float, default=0.3)
         parser.add_argument("--tta-uni-pct", type=float, default=0.7)
+        parser.add_argument("--tta-person", action="store_true")
         parser.add_argument("--ssm-state-dim", type=int, default=16)
         parser.add_argument("--conv-kernel", type=int, default=4)
         parser.add_argument("--gs-dim", type=int, default=64)
@@ -201,7 +202,6 @@ class EngageNetConfig:
         parser.add_argument("--lambda-ccc", type=float, default=1.0)
         parser.add_argument("--lambda-uni", type=float, default=0.5)
         parser.add_argument("--lambda-fair", type=float, default=0.05)
-        parser.add_argument("--lambda-within", type=float, default=0.0)
         parser.add_argument("--beta-w", type=float, default=0.5)
         parser.add_argument("--cdd-bins", type=int, default=10)
         parser.add_argument("--dt-min", type=float, default=1e-3)
@@ -239,6 +239,7 @@ class EngageNetConfig:
             tta_lambda=args.tta_lambda,
             tta_multi_pct=args.tta_multi_pct,
             tta_uni_pct=args.tta_uni_pct,
+            tta_person=args.tta_person,
             ssm_state_dim=args.ssm_state_dim,
             conv_kernel=args.conv_kernel,
             gs_dim=args.gs_dim,
@@ -256,7 +257,6 @@ class EngageNetConfig:
             lambda_ccc=args.lambda_ccc,
             lambda_uni=args.lambda_uni,
             lambda_fair=args.lambda_fair,
-            lambda_within=args.lambda_within,
             beta_w=args.beta_w,
             cdd_bins=args.cdd_bins,
             dt_min=args.dt_min,

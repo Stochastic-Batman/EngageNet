@@ -71,6 +71,22 @@ def _stack(windows: list[dict]) -> dict[str, jax.Array]:
 
 # tta_state: None -> plain inference with `state`; otherwise a fresh TTA state (reset per session by the caller)
 def run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, tta_state: TrainState | None = None, tau: float | None = None) -> tuple[dict[str, np.ndarray], dict[str, int]]:
+    if tta_state is None or not cnfg.tta_person:
+        return _run_session(session_dir, state, cnfg, tta_state, tau)
+    # One adaptation per person: every role starts again from the trained model, only that role's heads select windows
+    # and give the loss, and only that role's predictions are kept from the pass
+    result: dict[str, np.ndarray] = {}
+    stats = {"windows": 0, "selected": 0, "steps": 0}
+    for role in ROLES:
+        preds, role_stats = _run_session(session_dir, state, cnfg, tta_state, tau, roles=(role,))
+        result[role] = preds[role]
+        for k in stats:
+            stats[k] += role_stats[k]
+    return result, stats
+
+
+# roles: None -> TTA filter and loss over both people; else only these roles' heads
+def _run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, tta_state: TrainState | None, tau: float | None, roles: tuple[str, ...] | None = None) -> tuple[dict[str, np.ndarray], dict[str, int]]:
     ds = EngageNetDataset(cnfg, split=None, session_dirs=[session_dir])
 
     window_preds: dict[str, list[np.ndarray]] = {role: [] for role in ROLES}
@@ -85,10 +101,13 @@ def run_session(session_dir: Path, state: TrainState, cnfg: EngageNetConfig, tta
 
         if st is not None and len(buf) >= TTA_MIN_BATCH:
             multimodal, unimodal = predict_batch(st, inputs, tau)
+            if roles is not None:
+                multimodal = {r: multimodal[r] for r in roles}
+                unimodal = {k: v for k, v in unimodal.items() if k.split(".", 1)[0] in roles}
             mask = select_windows(window_uncertainty(multimodal), window_uncertainty(unimodal), multi_pct=cnfg.tta_multi_pct, uni_pct=cnfg.tta_uni_pct)
             n_sel = int(mask.sum())
             if n_sel > 0:
-                st, _loss = tta_step(st, inputs, mask, tau, lam=cnfg.tta_lambda)
+                st, _loss = tta_step(st, inputs, mask, tau, lam=cnfg.tta_lambda, roles=roles)
                 stats["selected"] += n_sel
                 stats["steps"] += 1
 
@@ -148,7 +167,7 @@ def main():
         if n_adapt == 0:
             raise RuntimeError("TTA: surgical_mask matched no parameters - check layer names in tta.surgical_mask")
         tta_template = TrainState.create(apply_fn=state.apply_fn, params=state.params, tx=make_tta_tx(state.params, cnfg.tta_lr), batch_stats=state.batch_stats)
-        log.info(f"TTA on: adapting {n_adapt:,} params, lr={cnfg.tta_lr}, lambda={cnfg.tta_lambda}, batch={cnfg.infer_batch}, pct=({cnfg.tta_multi_pct}, {cnfg.tta_uni_pct}), reset per session")
+        log.info(f"TTA on: adapting {n_adapt:,} params, lr={cnfg.tta_lr}, lambda={cnfg.tta_lambda}, batch={cnfg.infer_batch}, pct=({cnfg.tta_multi_pct}, {cnfg.tta_uni_pct}), reset per {'person' if cnfg.tta_person else 'session'}")
     else:
         log.info(f"TTA off, batch={cnfg.infer_batch}")
 

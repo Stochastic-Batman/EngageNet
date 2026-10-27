@@ -81,8 +81,9 @@ def count_adapted(params: dict) -> int:
 
 
 # state: TrainState whose tx comes from make_tta_tx ; stream_inputs: dict{str: (B, C_i, L)} ; mask: (B,) bool
-@partial(jax.jit, static_argnames=("lam",))
-def tta_step(state, stream_inputs: dict[str, jax.Array], mask: jax.Array, tau: float, lam: float = 1.0):
+# roles: None = loss over both people (original); else only these roles' heads enter the loss (adaptation to one person)
+@partial(jax.jit, static_argnames=("lam", "roles"))
+def tta_step(state, stream_inputs: dict[str, jax.Array], mask: jax.Array, tau: float, lam: float = 1.0, roles: tuple[str, ...] | None = None):
     weights = mask.astype(jnp.float32)
 
     def loss_fn(params):
@@ -91,11 +92,13 @@ def tta_step(state, stream_inputs: dict[str, jax.Array], mask: jax.Array, tau: f
         (multimodal, unimodal), updates = state.apply_fn(variables, stream_inputs, tau=tau, rng=None, train=True, mutable=["batch_stats"])
 
         # Each role's multimodal head teaches only the unimodal heads reading that role's streams
+        used = [r for r in multimodal if roles is None or r in roles]
         loss = jnp.zeros(())
-        for role, (a, b) in multimodal.items():
+        for role in used:
+            a, b = multimodal[role]
             uni_role = {k: v for k, v in unimodal.items() if k.split(".", 1)[0] == role}
             loss = loss + tta_loss(a, b, uni_role, weights=weights, lam=lam)
-        loss = loss / max(len(multimodal), 1)
+        loss = loss / max(len(used), 1)
 
         return loss, updates["batch_stats"]
 
