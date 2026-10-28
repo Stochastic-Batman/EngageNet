@@ -8,7 +8,7 @@ The task is the engagement-estimation task of the [MultiMediate'26 challenge](ht
 
 **Model.** Each feature stream of each person passes through a shallow convolutional encoder and an intra-modal BiMamba (a bidirectional selective state-space model) over time. An inter-modal BiMamba then scans across the streams to fuse them, and Beta regression heads output a Beta distribution per frame, which keeps predictions inside $[0,1]$ and gives a predictive variance. The best configurations add a BiMamba over time after fusion (`--fusion-temporal`) and, on NoXi+J, 60 s windows.
 
-**Findings.** A learned modality ordering (Gumbel-Sinkhorn) does no better than a fixed order; equivalence tests show the scan order does not matter within ±0.02 CCC. Unsupervised test-time adaptation does not help, whether per session, per person or with MC-dropout uncertainty. Both components remain in the code behind flags and are off in the best configurations.
+**Findings.** A learned modality ordering (Gumbel-Sinkhorn) does no better than a fixed order; equivalence tests show the scan order does not matter within ±0.02 CCC. Unsupervised test-time adaptation does not help, whether per session, per person or with MC-dropout uncertainty. The best configurations still use the learned ordering (a fixed order does as well) and no test-time adaptation.
 
 **Results** (validation CCC, session level, as in the official scoring):
 
@@ -19,15 +19,14 @@ The task is the engagement-estimation task of the [MultiMediate'26 challenge](ht
 
 ## Datasets
 
-The MultiMediate series has three corpora; this project uses NoXi and NoXi+J (MPIIGroupInteraction is not used). All three share the same file structure and can be read identically in code.
+We use the NoXi and NoXi+J corpora of the MultiMediate series. Both share the same file structure and can be read identically in code.
 
 ### Corpora
 
 | Corpus | Sessions | Locations | Notes |
 |---|---|---|---|
-| **MPIIGroupInteraction** | - | - | Group dynamics; used for eye contact detection and bodily behaviour recognition |
 | **NoXi** | 1–84 | Paris (1–25), Nottingham (26–65), Augsburg (66–84) | Large-scale multilingual expert-novice dyadic interactions in FR/EN/DE |
-| **NoXi+J** | 85–150 | Ishikawa, Japan (85–150) | East-Asian extension of NoXi with Japanese and Chinese speakers; critical for cross-cultural personalization analysis |
+| **NoXi+J** | 85–150 | Ishikawa, Japan (85–150) | Extension of NoXi recorded in Japan, mainly with Japanese and Chinese speakers (a few sessions in four other languages) |
 
 All sessions are screen-mediated dyadic interactions between an **expert** and a **novice** discussing a topic. Expert and novice are recorded independently (separate webcams, separate audio), giving two fully independent participant streams per session.
 
@@ -35,10 +34,10 @@ All sessions are screen-mediated dyadic interactions between an **expert** and a
 
 Each corpus is divided into splits. **Train and Val contain engagement annotations; Test does not** (withheld for the MultiMediate challenge leaderboard).
 
-| Corpus | Train | Val | Test | Additional Test |
-|---|---|---|---|---|
-| NoXi | annotations | annotations | - | - |
-| NoXi+J | annotations | annotations | - | N/A |
+| Corpus | Train | Val | Test (unlabelled) |
+|---|---|---|---|
+| NoXi | labelled | labelled | `test-base`, `test-additional` |
+| NoXi+J | labelled | labelled | `test` |
 
 NoXi+J split example (session numbers):
 
@@ -104,7 +103,6 @@ To obtain the data, you must follow the official MultiMediate procedures:
 1. Visit the [MultiMediate Dataset Page](https://multimediate-challenge.org/Dataset/).
 2. Download and sign the relevant End User License Agreement (EULA).
 3. Contact the dataset owners to request access:
-   - **MPIIGroupInteraction:** Victor Oei (`victor.oei@vis.uni-stuttgart.de`)
    - **NoXi:** Daksitha Withanage Don (`noxi@hcai.eu`)
    - **NoXi+J:** Marius Funk (`noxi+j@hcai.eu`)
 
@@ -178,7 +176,6 @@ XLA prints alarming `bfc_allocator ... ran out of memory` warnings during autotu
 ├── data/                                     # Dataset root (gitignored)
 │   ├── NoXi/
 │   ├── NoXi+J/
-│   ├── MPII/
 │   └── norm_stats_{corpus}.npz               # Cached per-channel normalisation statistics
 ├── documentation/                           # Paper (paper.tex / paper.pdf) and milestone presentations
 ├── models/, models_<tag>_s<seed>/           # Checkpoints written by training (gitignored)

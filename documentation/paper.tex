@@ -27,10 +27,15 @@
 	\maketitle
 	
 	\begin{abstract}
-	    EngageNet is a multimodal state-space architecture for real-time engagement regression in dyadic interactions. It combines per-modality bidirectional selective state-space models (BiMamba) with a differentiable Gumbel-Sinkhorn permutation layer for inter-modal fusion, and outputs calibrated predictions via Beta regression heads. A test-time adaptation mechanism leveraging predictive variance as an entropy proxy enables (at least it should, in principle) robust deployment under distribution shift across corpora (NoXi, NoXi+J). The system is evaluated using the Concordance Correlation Coefficient (CCC) as the primary metric and the Conditional Demographic Disparity (CDD) as a fairness constraint.
+	    EngageNet estimates continuous engagement in $[0,1]$, frame by frame and for both participants of expert-novice video calls (NoXi and NoXi+J, MultiMediate'26). Bidirectional selective state-space models (BiMamba) encode each feature stream over time, a second BiMamba fuses the streams by scanning across them in a learned order, and Beta regression heads output a bounded prediction with a predictive variance. A temporal block after fusion and, on NoXi+J, $60$ s windows give validation CCCs of $0.746$ on NoXi and $0.728$ on NoXi+J for single models, and $0.766$ and $0.787$ for rescaled six-seed ensembles. Two design components turn out not to help. Equivalence tests show that the order of the modality scan does not matter within $\pm 0.02$ CCC, so the learned ordering does no better than a fixed one. An unsupervised test-time adaptation driven by the predictive variance does not improve the scores, whether per session, per person or with Monte Carlo dropout; across corpora, it fails because the shift lies in the label scale, which it cannot observe.
 	\end{abstract}
 
+	\section{Introduction}
+	\label{sec:intro}
+	\textbf{Task and approach.} Engagement, how attentive and involved a person is in a conversation, is a central signal for systems that observe or mediate human interaction. The MultiMediate challenge \cite{withanage25} asks for a continuous engagement score in $[0,1]$ for every frame and for each participant of screen-mediated expert-novice conversations, recorded in Europe (NoXi \cite{cafaro2017noxi}) and in Japan (NoXi+J \cite{funk2024noxij}), and scores predictions by the concordance correlation coefficient (CCC). The task combines many heterogeneous feature streams per person, two interacting people, a bounded target, and corpora that differ in language, culture and in how the annotators used the scale. EngageNet encodes each feature stream of each person with a bidirectional selective state-space model (BiMamba) over time, fuses the streams with a second BiMamba that scans across them in a learned order, and predicts a Beta distribution per frame, so that every prediction lies in $[0,1]$ and comes with a variance that drives an unsupervised test-time adaptation. Section \ref{sec:architecture} describes the architecture, Section \ref{sec:ordering} the ordering layer, Section \ref{sec:evaluation} the evaluation metrics and Section \ref{sec:results} the experiments; Section \ref{sec:conclusion} summarises the contributions and limitations, and further details and negative results are in the appendices.
+
 	\section{Architecture}
+	\label{sec:architecture}
 	\subsection{Input}
 	Let $x=\{x_{1},\dots,x_{M}\}$ with $x_{i}\in\R^{C_{i}\times L}$ for all $i\in\{1,\dots,M\}$, where $C_{i}$ is the number of acquisition channels for the $i$-th modality and $L$ represents the number of time steps of the input signal. The feature streams are delivered at different sampling rates (the W2v-BERT 2.0 embeddings of NoXi, for example, arrive at $40$ Hz, most other streams at $25$ Hz), so every stream is first resampled to a common $25$ Hz by linear interpolation and then cut into windows of $L$ frames, consecutive windows overlapping by half. All $M$ inputs therefore share the same $L$; we use $L = 250$ frames, i.e.\ $10$ s.
 	
@@ -393,6 +398,7 @@
 	With one query per position, renumbering the streams by a permutation $\rho$ renumbers only the columns of $Z$: $Z' = Z R^\top$, where $R$ is the permutation matrix of $\rho$. Sinkhorn normalisation commutes with this, so $P' = P R^\top$, and the reordered sequence $\tilde{u}'_i = \sum_j P'_{ij} u'_j = \sum_j P_{ij} u_j = \tilde{u}_i$ is exactly the same, for the soft $P$ and at every temperature: the inter-modal BiMamba receives the same physical order of streams however they are numbered. Our first, stream-query formulation lacked this property. There the query of row $i$ was computed from stream $i$, so a renumbering renumbered the rows as well, $Z' = R Z R^\top$, and the reordered sequence came out renumbered by $\rho$.
 	
 	\section{Evaluation}
+	\label{sec:evaluation}
 
 	\subsection{Concordance Correlation Coefficient (CCC)}
 	\label{sec:ccc}
@@ -808,6 +814,14 @@
 	\end{center}
 	Our numbers are on the validation split and the leaderboard's on the test split, so the comparison is indicative only. The test predictions of each system (NoXi test-base and test-additional, NoXi+J test) are produced by the corresponding rescaled six-seed ensemble.
 
+
+	\section{Conclusion}
+	\label{sec:conclusion}
+	\textbf{Results.} EngageNet predicts continuous engagement with Beta regression heads on bidirectional state-space models. On the validation splits the best single models reach $0.746$ CCC on NoXi and $0.728$ on NoXi+J, and rescaled six-seed ensembles reach $0.766$ and $0.787$. What helped was modelling time after fusion and, on NoXi+J, training on longer windows; both act on the slow within-person changes that hold most of the remaining error.
+
+	\textbf{Contributions.} We contribute a Beta regression framework for bounded engagement, which keeps every prediction in $[0,1]$ and provides a predictive variance at no extra cost. We also contribute a set of analyses, each over several seeds with appropriate statistical tests, of what does and does not help. Equivalence tests show that the order in which the fusion block scans the modalities does not matter within $\pm 0.02$ CCC: the trained block forgets slowly along the modality axis, so a learned ordering has nothing to exploit. Test-time adaptation does not help, whether per session, per person or with Monte Carlo dropout, and the cross-corpus failure is a shift in label scale that adaptation without labels cannot observe. Finally, separating each person's level from their changes over time locates most of the remaining error in slow within-person dynamics. This guided the temporal block after fusion and the longer windows, which raised the single-model CCC on NoXi+J from $0.641$ to $0.728$.
+
+	\textbf{Limitations.} All numbers are on the validation splits, since test labels are not available, and with a seed-to-seed spread of $0.01$ to $0.03$ only differences of about $0.04$ are detectable with three seeds. Within-person dynamics remain the main gap: on NoXi the prediction follows a person's changes with a correlation of only about $0.5$, while perfect within-person dynamics would raise the CCC to $0.95$. Across corpora, corpus-specific models remain necessary unless the target corpus's label statistics are known.
 
 	\newpage
 	\begin{thebibliography}{9}
