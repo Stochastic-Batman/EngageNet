@@ -326,7 +326,7 @@
 	
 	In the filter, $U(x)$ is the first quantity, the parametric Beta variance, unless MC dropout is used (below); then it is $U_{\text{total}}$. The law of total variance guarantees that $U_{\text{total}}$ is the correct variance of the mixture distribution induced by MC dropout.
 	
-	\textbf{Implementation.} Dropout with rate $p$ sits before both dense layers of every Beta head, multimodal and unimodal; the rest of the network is unchanged, and without dropout the model is exactly the one described above. At inference, $T$ passes are run with dropout active and batch normalisation in evaluation mode; the prediction is then the mean $\bar\mu(x)$ of the $T$ means, and the filter uses $U_{\text{total}}$ (method 3). With a single deterministic pass the filter uses method 1, as in all earlier runs. \textcolor{red}{Results: Section \ref{sec:ttaresults}, pending.}
+	\textbf{Implementation.} Dropout with rate $p$ sits before both dense layers of every Beta head, multimodal and unimodal; the rest of the network is unchanged, and without dropout the model is exactly the one described above. At inference, $T$ passes are run with dropout active and batch normalisation in evaluation mode; the prediction is then the mean $\bar\mu(x)$ of the $T$ means, and the filter uses $U_{\text{total}}$ (method 3). With a single deterministic pass the filter uses method 1, as in all earlier runs. Results are in Section \ref{sec:ttaresults}: neither the averaging over passes nor the total-variance filter changes the scores.
 	
 	\subsection{Training Objective}
 	\label{sec:objective}
@@ -987,7 +987,26 @@
 	\end{center}
 	{\footnotesize $\Delta$ CCC: change of the pooled CCC, mean over the three seeds (unadapted: $0.744$ on NoXi, $0.736$ on NoXi+J).}
 
-	Adapting to one person behaves like adapting to a session. With the design setting the filter selects $4$ to $8\%$ of the windows, and the predictions barely move: no person's CCC changes by more than $0.015$, and the changes over people are not different from zero (Wilcoxon signed-rank, $p = 0.62$ on NoXi and $0.10$ on NoXi+J). With the larger learning rate and quantiles of $0.5$, which select about $16\%$ of the windows, the adaptation is harmful, mildly on NoXi and strongly on NoXi+J ($p < 0.001$), where single people lose up to $0.54$. Restricting the adaptation to one person therefore does not change the earlier result. A likely reason lies in the loss: its target is the model's own fused prediction, so an update can only pull the unimodal heads and the adapted layers towards what the model already predicts, and it carries no information about the person that the model does not have. \textcolor{red}{Next, as decided: the uncertainty estimate of method 3 (Section \ref{sec:uncertainty}) in the filter; it requires dropout layers and retraining.}
+	Adapting to one person behaves like adapting to a session. With the design setting the filter selects $4$ to $8\%$ of the windows, and the predictions barely move: no person's CCC changes by more than $0.015$, and the changes over people are not different from zero (Wilcoxon signed-rank, $p = 0.62$ on NoXi and $0.10$ on NoXi+J). With the larger learning rate and quantiles of $0.5$, which select about $16\%$ of the windows, the adaptation is harmful, mildly on NoXi and strongly on NoXi+J ($p < 0.001$), where single people lose up to $0.54$. Restricting the adaptation to one person therefore does not change the earlier result. A likely reason lies in the loss: its target is the model's own fused prediction, so an update can only pull the unimodal heads and the adapted layers towards what the model already predicts, and it carries no information about the person that the model does not have.
+
+	\textbf{Total uncertainty from MC dropout.} We then trained the same two configurations with dropout $p = 0.2$ in the Beta heads (Section \ref{sec:uncertainty}), three seeds each, and made three comparisons on the same seeds: the dropout model with a single deterministic pass against the model without dropout; the mean of $T = 10$ passes against that single pass; and adaptation on a single person with the total-variance filter $U_{\text{total}}$ (method 3, design setting $(0.3, 0.7, 10^{-4})$) against the mean of $T = 10$ passes without adaptation.
+
+	\begin{center}
+	\small
+	\begin{tabular}{lcccc}
+		\toprule
+		& \multicolumn{2}{c}{\textbf{NoXi}} & \multicolumn{2}{c}{\textbf{NoXi+J}} \\
+		\textbf{Comparison} & $\Delta$ \textbf{CCC} & \textbf{improved} & $\Delta$ \textbf{CCC} & \textbf{improved} \\
+		\midrule
+		Dropout, single pass vs.\ no dropout & $+0.008$ & $3/3$ seeds & $-0.039$ & $0/3$ seeds \\
+		Mean of $10$ passes vs.\ single pass & $-0.000$ & $6/20$ & $-0.001$ & $9/20$ \\
+		Person, $U_{\text{total}}$ filter vs.\ mean of $10$ passes & $-0.002$ & $14/20$ & $-0.000$ & $7/20$ \\
+		\bottomrule
+	\end{tabular}
+	\end{center}
+	{\footnotesize $\Delta$ CCC: change of the pooled CCC, mean over the three seeds. With dropout: $0.751 \pm 0.004$ on NoXi and $0.698 \pm 0.026$ on NoXi+J; without: $0.744 \pm 0.008$ and $0.736 \pm 0.013$.}
+
+	Dropout itself brings no detectable gain: on NoXi all three seeds are slightly higher (Welch $p = 0.23$), on NoXi+J all three are lower ($p = 0.11$; paired over seeds $p = 0.04$). Averaging the passes leaves the prediction practically unchanged: the pooled CCC moves by less than $0.001$, and the changes over people are not different from zero (Wilcoxon $p = 0.14$ on NoXi and $0.43$ on NoXi+J). As dropout acts only in the heads, all passes share the same representation up to the heads, which likely keeps them close together. With $U_{\text{total}}$, the filter selects $4.7\%$ of the windows on NoXi and $2.4\%$ on NoXi+J, no more than with the parametric variance, and the adaptation again stays within noise (Wilcoxon $p = 0.26$ and $0.59$; no person changes by more than $0.021$). Method 3 therefore does not change the result: the filter now sees the full predictive variance, but the target of the loss is still the model's own prediction, the limitation named above. Test-time adaptation remains a negative result, and dropout is not used in the final systems.
 
 	\subsection{Ensembling}
 	For each corpus we average, frame by frame, the predictions of the six seeds of the final configuration (core features plus text, mixed batches, full objective, $10$ s windows). Every member is trained on the training split only, and all six are used; no member is chosen by its validation score, since selecting the best single run would mostly select the luckiest seed.
