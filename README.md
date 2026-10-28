@@ -1,14 +1,25 @@
 # EngageNet
 
-This repository contains the codebase for the **Multi-Modal Social Behaviour Analysis** project at the **Georgian Artificial Intelligence Association (GAIA)**. Under the supervision of **Dr. Philipp Müller** and PhD candidate **Beso Mikaberidze**, our team is exploring behavioral personalization using high-fidelity multi-modal datasets.
+This repository contains the code for the engagement-estimation project at the **Georgian Artificial Intelligence Association (GAIA)**, supervised by **Dr. Philipp Müller** and **Beso Mikaberidze**. The paper is [`documentation/paper.pdf`](documentation/paper.pdf).
 
 ## Project Overview
 
-The project focuses on predicting and analyzing social behavior - specifically **engagement** and **personalization** - in dyadic and group interactions. We utilize the datasets provided by the [MultiMediate Challenge](https://multimediate-challenge.org/), which involve expert-novice dynamics across diverse cultural and linguistic backgrounds.
+The task is the engagement-estimation task of the [MultiMediate'26 challenge](https://multimediate-challenge.org/): predict a continuous engagement score in $[0,1]$ for every frame and for each of the two people in expert-novice video calls, on the **NoXi** and **NoXi+J** corpora.
+
+**Model.** Each feature stream of each person passes through a shallow convolutional encoder and an intra-modal BiMamba (a bidirectional selective state-space model) over time. An inter-modal BiMamba then scans across the streams to fuse them, and Beta regression heads output a Beta distribution per frame, which keeps predictions inside $[0,1]$ and gives a predictive variance. The best configurations add a BiMamba over time after fusion (`--fusion-temporal`) and, on NoXi+J, 60 s windows.
+
+**Findings.** A learned modality ordering (Gumbel-Sinkhorn) does no better than a fixed order; equivalence tests show the scan order does not matter within ±0.02 CCC. Unsupervised test-time adaptation does not help, whether per session, per person or with MC-dropout uncertainty. Both components remain in the code behind flags and are off in the best configurations.
+
+**Results** (validation CCC, session level, as in the official scoring):
+
+| | NoXi | NoXi+J |
+|---|---|---|
+| Single model, mean of 6 seeds | 0.746 ± 0.008 | 0.728 ± 0.016 |
+| Rescaled 6-seed ensemble | 0.766 | 0.787 |
 
 ## Datasets
 
-We use three corpora from the MultiMediate series. All three share the same file structure and can be read identically in code.
+The MultiMediate series has three corpora; this project uses NoXi and NoXi+J (MPIIGroupInteraction is not used). All three share the same file structure and can be read identically in code.
 
 ### Corpora
 
@@ -150,7 +161,7 @@ Expect `[CudaDevice(id=0), ...]`. If it prints `[CpuDevice(id=0)]`, JAX fell bac
 
 ### Shared GPU Etiquette
 
-On multi-user machines, pin yourself to one GPU and disable JAX's default 75% memory preallocation so others can still use the card:
+On multi-user machines, pin yourself to one GPU and disable JAX's default 75% memory preallocation so others can still use the card (the scripts in `scripts/*.sh` set this automatically, together with a 40% memory cap per process):
 
 ```bash
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
@@ -169,12 +180,27 @@ XLA prints alarming `bfc_allocator ... ran out of memory` warnings during autotu
 │   ├── NoXi+J/
 │   ├── MPII/
 │   └── norm_stats_{corpus}.npz               # Cached per-channel normalisation statistics
-├── models/                                   # Checkpoints written by training (gitignored)
+├── documentation/                           # Paper (paper.tex / paper.pdf) and milestone presentations
+├── models/, models_<tag>_s<seed>/           # Checkpoints written by training (gitignored)
+├── sweep_out/, logs/                        # Predictions and logs of scripted runs (gitignored)
 ├── submissions/                              # Generated submission CSVs + results.json (gitignored)
 ├── Dockerfile.train/Dockerfile.inference    # Dockerfiles for training and inference
 ├── EngageNet_venv/                          # Python virtual environment
 ├── requirements.txt                         # For Docker
-├── scripts/                                 # Standalone dev/debug tools - not imported by src/
+├── scripts/                                 # Experiment drivers, analysis and dev/debug tools - not imported by src/
+│   ├── run_seeds.sh                         # Train + score one configuration over several seeds (resumable)
+│   ├── infer_test.sh                        # Test-split inference for every seed of a configuration
+│   ├── infer_val.sh                         # Validation inference of trained seeds with extra flags (e.g. TTA)
+│   ├── rescore.sh                           # Re-run validation inference + scoring without training
+│   ├── ensemble_eval.py                     # Frame-wise seed ensemble, label-free rescaling, scoring/writing
+│   ├── run_orders.sh, probe_orders.sh       # Fixed modality orders: train them / probe them at inference
+│   ├── order_stats.py                       # Equivalence tests (TOST) and ANOVA for the order experiments
+│   ├── probe_window.sh                      # Inference-time window-length probe
+│   ├── level_oracle.py                      # Person level vs within-person dynamics, timescale bands
+│   ├── person_eval.py                       # Per-person comparison of two prediction sets (Wilcoxon)
+│   ├── probe_stages.py                      # Linear probes on the output of each network stage
+│   ├── dump_P.py, dump_decay.py             # Read out the ordering matrix P / the inter-modal state decay
+│   ├── best_tau.py                          # Write best_tau.json for checkpoints trained before it existed
 │   ├── bench_step.py                        # Time train_step on synthetic batches (GPU cost vs data-loading cost)
 │   ├── check_collapse.py                    # Compare prediction spread vs target spread on val
 │   ├── check_data.py                        # Scan raw streams + labels for NaN/inf and value scales
@@ -188,7 +214,7 @@ XLA prints alarming `bfc_allocator ... ran out of memory` warnings during autotu
 │   ├── data_loader.py                       # Batch-yielding generator over the dataset
 │   ├── dataset.py                           # Lazy, memory-efficient window iterator
 │   ├── evaluate.py                          # Score submission CSVs against ground-truth (CCC, CDD)
-│   ├── inference.py                         # Multi-corpus TTA inference + submission CSV output
+│   ├── inference.py                         # Inference + submission CSV output (optional TTA, MC dropout)
 │   ├── init_encoder.py                      # Per-modality shallow 1-D CNN encoder
 │   ├── inter_modal.py                       # Gumbel-Sinkhorn ordering + cross-modal BiMamba
 │   ├── metrics.py                           # CCC, CDD_G, CDD_L metric implementations
@@ -203,7 +229,6 @@ XLA prints alarming `bfc_allocator ... ran out of memory` warnings during autotu
 │   ├── test_frontend.py                     # Smoke-test: end-to-end forward pass on CPU
 │   ├── test_inter_modal.py                  # Smoke-test: Gumbel-Sinkhorn + cross-modal BiMamba
 │   └── test_model.py                        # Smoke-test of the entire model
-├── engineering_roadmap.md
 └── README.md
 ```
 
@@ -265,27 +290,48 @@ python src/train.py --active-modalities audio.egemapsv2 audio.w2vbert2_embedding
 python src/train.py --help
 ```
 
-Checkpoints are saved to `models/EngageNet_{epoch}` every `--checkpoint-every` epochs (default: 10). Training includes CCC-based validation every epoch with early stopping (patience=10). The best checkpoint is saved to `models/best/`.
+Checkpoints are saved to `models/EngageNet_{epoch}` every `--checkpoint-every` epochs (default: 10). Training includes CCC-based validation every epoch with early stopping (patience=10). The best checkpoint is saved to `models/best/`, together with `best_tau.json` (the Gumbel-Sinkhorn temperature of that epoch, reused at inference).
 
-> **Warning:** the checkpoint directory is fixed, so a new run **overwrites `models/best`** as soon as it beats its own first epoch. Back up any run you care about before starting another:
-> ```bash
-> cp -r models models_backup_$(date +%Y%m%d)
-> ```
+> **Warning:** by default every run writes to `models/`, so a new run **overwrites `models/best`**. Give each run its own directory with `--checkpoint-dir`, as `scripts/run_seeds.sh` does.
 
-Long runs should go under `tmux` or `screen` so they survive a dropped SSH session:
+New behaviour is added behind a flag whose default keeps the old behaviour, so earlier results stay reproducible.
+
+### Reproducing the best configurations
+
+`scripts/run_seeds.sh` trains one configuration over several seeds, then runs validation inference and scores it. It adds `--lr 2e-4 --patience 15 --lambda-ccc 1.0`, writes `models_<tag>_s<seed>/`, `sweep_out/<tag>_s<seed>/` and `logs/`, appends scores to `logs/eval_<tag>.log`, and skips finished seeds, so an interrupted run can simply be relaunched. Start it detached so it survives a dropped SSH session:
 
 ```bash
-tmux new -s train
-# ... start training, then detach with Ctrl-b then d
-tmux attach -t train
+F="--shuffle-windows --fusion-temporal --cover-tail --active-modalities audio.egemapsv2 audio.w2vbert2_embeddings audio.xlm_roberta_embeddings openface2 openpose"
+
+# NoXi: 10 s windows, batches of 4
+SEEDS="95 1 2 3 4 5" setsid nohup bash scripts/run_seeds.sh NoXi 0 ftb4_noxi $F --batch-size 4 > logs/driver_ftb4_noxi.log 2>&1 < /dev/null &
+
+# NoXi+J: 60 s windows, batches of 4
+SEEDS="95 1 2 3 4 5" MEM_FRACTION=0.5 setsid nohup bash scripts/run_seeds.sh NoXi+J 1 ftw60_noxij $F --window-len 1500 --window-stride 750 --infer-batch 4 --batch-size 4 --n-epochs 100 > logs/driver_ftw60_noxij.log 2>&1 < /dev/null &
 ```
+
+## Test Predictions and Ensembling
+
+```bash
+# Test-split inference for every seed (same flags as training)
+bash scripts/infer_test.sh NoXi+J 1 ftw60_noxij $F --window-len 1500 --window-stride 750 --infer-batch 4
+
+# Frame-wise 6-seed ensemble with label-free rescaling, written in the submission layout
+python scripts/ensemble_eval.py --members sweep_out/test_ftw60_noxij_s{95,1,2,3,4,5} --corpus NoXi+J --split test --rescale --write-dir submissions/v2
+```
+
+For NoXi, run the ensemble once for `--split test-base` and once for `--split test-additional`. The rescaling stretches the averaged prediction back to the members' average spread; it uses predictions only, never labels.
 
 ## Test-Time Adaptation
 
-TTA is applied at inference on unlabelled test data. It selectively fine-tunes surgical layers (BatchNorm, InitEncoder conv1, first Dense in cross-modal BiMamba) using samples where the multimodal prediction is confident but individual modality heads disagree. No ground-truth labels are needed - the multimodal predictive mean serves as a pseudo-target.
+TTA (`--tta`, off by default) is applied at inference on unlabelled data. It fine-tunes surgical layers (BatchNorm, InitEncoder conv1, first Dense in cross-modal BiMamba) on windows where the multimodal prediction is confident but the unimodal heads are uncertain. No ground-truth labels are needed - the multimodal predictive mean serves as a pseudo-target. In our experiments it does not improve the scores (paper, Section 4.11 and Appendix I).
+
+Variants:
+- `--tta-person` - adapt to one person at a time (per role, reset for each person) instead of a whole session
+- `--dropout p` (training) with `--mc-samples T` (inference) - MC dropout: the prediction is the mean of T stochastic passes and the filter uses the total predictive variance
 
 Key functions in `src/tta.py`:
-- `sample_filter` - selects high-value adaptation samples via percentile thresholds on multimodal vs. unimodal uncertainty
+- `window_variance` / `select_windows` - per-window uncertainty, and the batch-quantile filter on multimodal vs. unimodal uncertainty
 - `tta_loss` - mutual information sharing (KL divergence) + pseudo-label supervision
 - `surgical_mask` - freezes all parameters except the designated surgical layers
 - `tta_step` - single adaptation step with masked gradients
@@ -307,7 +353,7 @@ Alongside CCC, the challenge requires two fairness metrics - **CDD_G** (gender) 
 The repo provides two Dockerfiles for the same codebase - one for training, one for inference. Both share `requirements.txt` and the `src/` directory, but differ in what data they expect and what script they run.
 
 
-The inference container expects a `models/` directory with at least one checkpoint produced by training. It automatically loads the checkpoint with the highest epoch number.
+The inference container expects a `models/` directory with at least one checkpoint produced by training. It loads `models/best`, or otherwise the checkpoint with the highest epoch number.
 
 ```bash
 # Build
@@ -320,7 +366,7 @@ docker run --gpus all engagenet-train
 # Train with custom params
 docker run --gpus all engagenet-train python3.14 src/train.py --n-epochs 100 --lr 5e-4
 
-# Inference with TTA (after training)
+# Inference (after training)
 docker run --gpus all engagenet-inference
 ```
 
