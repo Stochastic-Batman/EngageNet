@@ -1,19 +1,30 @@
-\documentclass[11pt,a4paper]{article}
+\documentclass[10pt,a4paper,twocolumn]{article}
 \usepackage{amsmath, amssymb, amsfonts}
+\usepackage{mathtools}
 \usepackage{geometry}
 \usepackage{hyperref}
-\geometry{margin=1in}
+\geometry{margin=0.75in}
+\setlength{\columnsep}{0.25in}
 \usepackage{parskip}
 \usepackage{xcolor}
 \usepackage{booktabs}
 \usepackage{longtable}
 \usepackage{caption}
-\usepackage[title]{appendix}
+\usepackage[raggedright]{titlesec}
+% full-width tables: fill pages from the top, allow more of them next to text
+\makeatletter
+\setlength{\@dblfptop}{0pt}
+\setlength{\@dblfpsep}{14pt}
+\setlength{\@dblfpbot}{0pt plus 1fil}
+\makeatother
+\setcounter{dbltopnumber}{3}
+\renewcommand{\dbltopfraction}{0.85}
+\renewcommand{\dblfloatpagefraction}{0.6}
 \captionsetup[table]{font=small,labelfont=bf,skip=6pt,position=below}
 \newsavebox{\captabbox}
 \newlength{\captabwidth}
-% table with its caption below, the caption as wide as the table (at least 0.8\linewidth)
-\newenvironment{captab}[1]{\def\captabtext{#1}\begin{lrbox}{\captabbox}}{\end{lrbox}\setlength{\captabwidth}{\wd\captabbox}\ifdim\captabwidth<0.8\linewidth\setlength{\captabwidth}{0.8\linewidth}\fi\begin{minipage}{\captabwidth}\centering\usebox{\captabbox}\captionof{table}{\captabtext}\end{minipage}}
+% table with its caption below, the caption as wide as the table (at least 0.6\linewidth)
+\newenvironment{captab}[1]{\def\captabtext{#1}\begin{lrbox}{\captabbox}}{\end{lrbox}\setlength{\captabwidth}{\wd\captabbox}\ifdim\captabwidth<0.6\linewidth\setlength{\captabwidth}{0.6\linewidth}\fi\begin{minipage}{\captabwidth}\centering\usebox{\captabbox}\captionof{table}{\captabtext}\end{minipage}}
 
 \newcommand{\R}{\mathbb{R}}
 
@@ -49,7 +60,7 @@
 	\textbf{Weight sharing across roles.} The two roles observe the same physical signal semantics (an eGeMAPS vector means the same thing whether it was extracted from the expert's or the novice's microphone). Accordingly, the InitEncoder, the uniform channel projection, the intra-modal BiMamba block, and the unimodal Beta head are instantiated \emph{once per feature type} and applied to both roles. Only the inter-modal stage distinguishes the roles, since the permutation is learned over all $M$ role-feature pairs jointly. This halves the parameter count relative to per-role encoders and forces the shared representation to be role-agnostic.
 
 	\textbf{Target construction.} Write $y^{e}_t$ and $y^{n}_t$ for the engagement annotations of the expert and the novice at frame $t$, each in $[0,1]$. The challenge asks for both separately \cite{withanage25}, and we predict both. Suppose both annotations have the same variance $\sigma^2$ and correlation $r$ with each other. Scaling a random variable by $\tfrac{1}{2}$ scales its variance by $\tfrac{1}{4}$, and the variance of a sum is the sum of the variances plus twice the covariance, so
-	$$\operatorname{Var}(\bar{y}) = \tfrac{1}{4}\left[\operatorname{Var}(y^{e}) + \operatorname{Var}(y^{n}) + 2\operatorname{Cov}(y^{e}, y^{n})\right] = \tfrac{1}{4}\left[\sigma^2 + \sigma^2 + 2r\sigma^2\right] = \frac{\sigma^2(1+r)}{2}$$
+	$$\begin{aligned}\operatorname{Var}(\bar{y}) &= \tfrac{1}{4}\left[\operatorname{Var}(y^{e}) + \operatorname{Var}(y^{n}) + 2\operatorname{Cov}(y^{e}, y^{n})\right] \\ &= \tfrac{1}{4}\left[\sigma^2 + \sigma^2 + 2r\sigma^2\right] = \frac{\sigma^2(1+r)}{2}\end{aligned}$$
 	using $\operatorname{Cov}(y^{e}, y^{n}) = r\sigma^2$. 
 	The corpus paper \cite{funk2024noxij} measures exactly this correlation and finds it to be small and, in three of four language sets, negative: $r = -0.19$ for German, $-0.07$ for English, $-0.05$ for French, and $+0.51$ for Japanese, the last attributed to a stronger tendency toward interpersonal harmony. Substituting these values, the averaged target retains only $41\%$, $47\%$ and $48\%$ of the variance in the European sets respectively, and $76\%$ in the Japanese set - so on most of the corpus more than half the signal is destroyed before training begins.
 	Since CCC is normalised by the variance of the target (Section \ref{sec:ccc}), what is flattened away here cannot be recovered later.
@@ -90,7 +101,7 @@
 	\textbf{InitEncoder internals.} Each InitEncoder is a shallow three-stage block applied to the standardised input:
 	$$h_i = \text{InitEncoder}_i(\tilde{x}_i) = f_i\Bigl(\sigma\bigl(\text{BN}\bigl(\text{Conv1D}_i(\tilde{x}_i^{\top})\bigr)\bigr)\Bigr),$$
 	where $\text{Conv1D}_i$ is an ordinary (dense) temporal convolution mapping $C_i \to C_i'$ channels: every output channel at frame $t$ is a learned weighted sum over \emph{all} input channels and a short window of neighbouring frames,
-	$$\bigl(\text{Conv1D}_i(z)\bigr)_{t,c'} = b_{c'} + \sum_{j=0}^{k_i-1}\sum_{c=1}^{C_i} W_{j,c,c'}\; z_{t+j-p_i,\,c}, \qquad p_i = \Bigl\lfloor \frac{k_i-1}{2} \Bigr\rfloor, \qquad c' = 1, \dots, C_i',$$
+	$$\begin{gathered}\bigl(\text{Conv1D}_i(z)\bigr)_{t,c'} = b_{c'} + \sum_{j=0}^{k_i-1}\sum_{c=1}^{C_i} W_{j,c,c'}\; z_{t+j-p_i,\,c}, \\ p_i = \Bigl\lfloor \frac{k_i-1}{2} \Bigr\rfloor, \qquad c' = 1, \dots, C_i',\end{gathered}$$
 	where $z = \tilde{x}_i^{\top} \in \R^{L \times C_i}$, frames outside the window count as zero (\texttt{SAME} padding), and $W \in \R^{k_i \times C_i \times C_i'}$ and $b \in \R^{C_i'}$ are learned. We use the same kernel for every stream: $k_i = 5$ frames ($200$ ms), so $p_i = 2$ and the filter is centred on frame $t$, covering frames $t-2, \dots, t+2$. The stride is $s_i = 1$, and $C_i' = 64$ for eGeMAPS v2 and OpenPose and $128$ for the other streams. This layer is the only place where a stream's raw channels are mixed with each other, and with $k_i C_i C_i'$ weights it is also the largest layer of the model for the wide streams: the convolutions of W2v-BERT 2.0, OpenFace2 and XLM-RoBERTa alone hold about $1.6$M of the final model's $2.75$M parameters. Further, $\text{BN}$ is batch normalisation \cite{ioffe2015batchnorm} over the channel axis, whose running statistics are frozen at evaluation time and which later serves as a surgical adaptation target (Section \ref{sec:surgical}); $\sigma(x) = \frac{x}{1 + e^{-x}}$ is the SiLU activation function, and $f_i$ is the uniform channel projection defined in Section \ref{sec:gumbel}, mapping $C_i' \to C'$ so that all modalities share a common width. Encoder weights are shared between the expert and novice streams of the same feature type.
 	
 	The BiMamba module operates on $h_i$ as follows. Let $\text{LN}(\cdot)$ denote layer normalisation \cite{ba2016layernorm}.
@@ -102,8 +113,8 @@
 	    \item The output of the gating mechanism is $g_{i}=\sigma(W_{i}^{g}\bar{h}_{i}+b_{i}^{g})$, where $W_{i}^{g}$ is the weight matrix, $b_{i}^{g}$ is the bias, and $\displaystyle \sigma(x) = \frac{x}{1 + e^{-x}}$. Intuitively, $g_{i}$ highlights engagement-relevant information while suppressing noise and redundancy.
 		
 		\item BiMamba models temporal dependencies from both forward and backward perspectives using state-space modeling, thereby capturing richer contextual dynamics:
-		$$h_{i}^{\rightarrow}=g_{i}\odot \text{SSM}_{\rightarrow}(\sigma(\text{DWConv1D}_{\rightarrow}(W_{i}^{h}\bar{h}_{i}+b_{i}^{h})))\in\R^{L^{\prime}\times C^{\prime}}$$
-		$$h_{i}^{\leftarrow}=g_{i}\odot \text{Rev}_{t}\Bigl(\text{SSM}_{\leftarrow}(\sigma(\text{DWConv1D}_{\leftarrow}(\text{Rev}_{t}(W_{i}^{h}\bar{h}_{i}+b_{i}^{h}))))\Bigr)\in\R^{L^{\prime}\times C^{\prime}}$$
+		$$\begin{multlined}h_{i}^{\rightarrow}=g_{i}\odot \text{SSM}_{\rightarrow}(\sigma(\text{DWConv1D}_{\rightarrow}( \\ W_{i}^{h}\bar{h}_{i}+b_{i}^{h})))\in\R^{L^{\prime}\times C^{\prime}}\end{multlined}$$
+		$$\begin{multlined}h_{i}^{\leftarrow}=g_{i}\odot \text{Rev}_{t}\Bigl(\text{SSM}_{\leftarrow}(\sigma(\text{DWConv1D}_{\leftarrow}( \\ \text{Rev}_{t}(W_{i}^{h}\bar{h}_{i}+b_{i}^{h}))))\Bigr)\in\R^{L^{\prime}\times C^{\prime}}\end{multlined}$$
 		where $h_{i}^{\rightarrow}$ and $h_{i}^{\leftarrow}$ are the feature representations of the $i$-th modality in forward and backward modeling. $\text{Rev}_{t}(\cdot)$ denotes flipping along the time dimension $L^{\prime}$.
 		
 		Note that the time reversal is applied to the backward SSM output \emph{before} gating, so that the gate $g_i$ - which is computed once, in forward time order - modulates the feature belonging to the same time step $t$ in both branches. Applying $\text{Rev}_t$ after gating would instead pair the gate at step $t$ with the feature at step $L'-t$, misaligning the two.
@@ -111,7 +122,7 @@
 		The operator $\odot$ denotes the Hadamard product, the element-wise multiplication of two arrays of the same shape, so the dimensions remain unchanged. $W_{i}^{h}$ represents the weight matrix and $b_{i}^{h}$ represents the bias.
 
 		$\text{DWConv1D}$ is a \emph{depthwise} temporal convolution: unlike the dense convolution of the InitEncoder, every channel is filtered separately with its own short kernel, and channels are not mixed. For an input $z \in \R^{L' \times C'}$,
-		$$\bigl(\text{DWConv1D}(z)\bigr)_{t,d} = b_d + \sum_{j=0}^{D_C-1} w_{j,d}\; z_{t+j-p,\,d}, \qquad p = \Bigl\lfloor \frac{D_C-1}{2} \Bigr\rfloor, \qquad d = 1,\dots,C',$$
+		$$\begin{gathered}\bigl(\text{DWConv1D}(z)\bigr)_{t,d} = b_d + \sum_{j=0}^{D_C-1} w_{j,d}\; z_{t+j-p,\,d}, \\ p = \Bigl\lfloor \frac{D_C-1}{2} \Bigr\rfloor, \qquad d = 1,\dots,C',\end{gathered}$$
 		with learned $w \in \R^{D_C \times C'}$ and $b \in \R^{C'}$, and frames outside the window counted as zero. Each output value therefore depends only on the same channel at $D_C$ neighbouring frames: it is a learned local smoothing or differencing of every channel, applied before the state-space model. We use $D_C = 4$, as in \cite{gu2023mamba}, so with $p = 1$ the filter covers frames $t-1, \dots, t+2$; the backward branch runs on the reversed sequence, where the same filter covers frames $t-2, \dots, t+1$ of the original time order. The reference Mamba implementation pads causally, so that frame $t$ sees only the past; since our model is bidirectional and processes complete windows, we use centred \texttt{SAME} padding instead. The two branches have separate convolutions. A depthwise filter has $D_C C'$ weights instead of the $D_C C'^2$ of a dense convolution, which keeps its cost linear in the channel width. In the inter-modal block, whose sequence runs over modalities instead of time, the same operator is used with $D_C = 2$, so each position is combined with the next one.
 		
 		$\text{SSM}(\cdot)$ represents the Selective State Space Model. Its starting point is a continuous linear time-invariant (LTI) system, defined by the state equation $\xi'(t) = A \xi(t) + B z(t)$ and the output equation $y(t) = C \xi(t)$, where $z(t)$ is the input signal. (Throughout, we write $z$ for the input of the SSM, to keep it apart from the block output $u_i$.) To operate on discrete sequence steps, the continuous transition operator $A$ and input operator $B$ are discretised with a timestep $\Delta > 0$. The exact discretisation yields $\bar{A} = \exp(\Delta A)$ and $\bar{B} = (\Delta A)^{-1}(\bar{A} - I)\Delta B$. Following the reference Mamba implementation \cite{gu2023mamba}, we adopt the first-order (Euler) simplification of the input operator,
@@ -120,7 +131,7 @@
 		$$\exp\bigl(\Delta\,\mathrm{diag}(a_1,\dots,a_N)\bigr) = \mathrm{diag}\bigl(e^{\Delta a_1}, \dots, e^{\Delta a_N}\bigr).$$
 
 		\textbf{The SSM, exactly.} Collecting the pieces described in the following paragraphs and in Appendix \ref{app:ssm} - the diagonal state matrix, its parameterisation, and the input-dependent $\Delta_t$, $B_t$, $C_t$ of the selection mechanism - the operator applied in each branch is the following. Its input is a sequence $z = (z_1, \dots, z_{L'})$ with $z_t \in \R^{C'}$; in step 3, $z = \sigma(\text{DWConv1D}(W_i^h \bar{h}_i + b_i^h))$. Every channel $d \in \{1,\dots,C'\}$ carries its own state $\xi^{(d)}_t \in \R^N$, started at $\xi^{(d)}_0 = \mathbf{0}$, and
-		$$\xi^{(d)}_t = \exp\bigl(\Delta_{t,d}\,a_d\bigr) \odot \xi^{(d)}_{t-1} + \Delta_{t,d}\, z_{t,d}\, B_t, \qquad t = 1, \dots, L',$$
+		$$\begin{multlined}\xi^{(d)}_t = \exp\bigl(\Delta_{t,d}\,a_d\bigr) \odot \xi^{(d)}_{t-1} + \Delta_{t,d}\, z_{t,d}\, B_t, \\ t = 1, \dots, L',\end{multlined}$$
 		$$\bigl(\text{SSM}(z)\bigr)_{t,d} = y_{t,d} = C_t^{\top}\xi^{(d)}_t = \sum_{n=1}^{N} C_{t,n}\,\xi^{(d)}_{t,n}.$$
 		Here $a_d = (a_{d,1}, \dots, a_{d,N}) \in \R^N$ holds the (negative) decay rates of channel $d$ and the exponential is taken elementwise; $\Delta_{t,d} > 0$ is the timestep of channel $d$ at step $t$; and $B_t, C_t \in \R^N$ are the input and read-out vectors at step $t$, shared by all channels. The first line is the discretised state equation, with $\bar{A} = \exp(\Delta A)$ and $\bar{B} = \Delta B$; the second is the output equation. The SSM thus maps $\R^{L' \times C'}$ to $\R^{L' \times C'}$.
 
@@ -143,7 +154,7 @@
 	\label{sec:intermodal}
 	Relying solely on intra-modal modeling neglects inter-modal correlations that are obviously important for comprehensive multimodal understanding. The intra-modal stage yields $M$ representations $u_i \in \R^{L' \times C'}$ of common width, and the fusion stage must let them exchange information. How that exchange is arranged - specifically, which axis the state-space model treats as its sequence - determines both what the fusion can express and whether the learned modality ordering of Section \ref{sec:ordering} has any effect at all. Other possible arrangements, and why they fail, are described in Appendix \ref{app:arrangements}.
 
-	We treat the list of modalities itself as the sequence, in which each modality takes up exactly one position. First, the modality outputs are reordered by the learned matrix $P$ of Section \ref{sec:gumbel}: position $i$ of the sequence receives $\tilde{u}_i = \sum_{j=1}^{M} P_{ij} u_j \in \R^{L' \times C'}$. At every individual time step $t$, the model processes a sequence of $M$ vectors, $\bigl(\tilde{u}_1^{(t)}, \dots, \tilde{u}_M^{(t)}\bigr)$, each with a size of $C'$. The BiMamba block is then applied directly across this sequence of modalities: $$H^{(t)} = \text{BiMamba}_{\text{modality}} \bigl(\tilde{u}_1^{(t)}, \dots, \tilde{u}_M^{(t)}\bigr) \in \R^{M \times C'}, \qquad t = 1,\dots,L'.$$
+	We treat the list of modalities itself as the sequence, in which each modality takes up exactly one position. First, the modality outputs are reordered by the learned matrix $P$ of Section \ref{sec:gumbel}: position $i$ of the sequence receives $\tilde{u}_i = \sum_{j=1}^{M} P_{ij} u_j \in \R^{L' \times C'}$. At every individual time step $t$, the model processes a sequence of $M$ vectors, $\bigl(\tilde{u}_1^{(t)}, \dots, \tilde{u}_M^{(t)}\bigr)$, each with a size of $C'$. The BiMamba block is then applied directly across this sequence of modalities: $$\begin{multlined}H^{(t)} = \text{BiMamba}_{\text{modality}} \bigl(\tilde{u}_1^{(t)}, \dots, \tilde{u}_M^{(t)}\bigr) \\ \in \R^{M \times C'}, \qquad t = 1,\dots,L'.\end{multlined}$$
 	
 	This is calculated independently for each time step using the same shared weights. The job of understanding time is left entirely to a previous part of the network.
 
@@ -167,7 +178,7 @@
 	$$ p(y|\alpha, \beta) = \frac{y^{\alpha-1}(1-y)^{\beta-1}}{B(\alpha, \beta)}, \quad B(\alpha, \beta) = \frac{\Gamma(\alpha)\Gamma(\beta)}{\Gamma(\alpha+\beta)} $$
 	
 	\textbf{Head architecture.} Each Beta head is a two-layer perceptron rather than a bare linear read-out. Let $r \in \R^{L' \times d_{\text{in}}}$ denote the representation entering the head, where $d_{\text{in}}$ is its channel width. The head first maps $r$ through one hidden layer, $$ v = \sigma\bigl(W^{(1)} r + b^{(1)}\bigr) \in \R^{L' \times d_h}, $$ where the superscript $(1)$ indexes the first (and only) hidden layer: $W^{(1)} \in \R^{d_h \times d_{\text{in}}}$ is its weight matrix and $b^{(1)} \in \R^{d_h}$ its bias, $\sigma$ is the SiLU activation, and $d_h$ is the head width. The hidden activation $v$ is then read out by two separate linear layers, one per shape parameter:
-	$$ z_\alpha = W^{(\alpha)} v + b^{(\alpha)}, \qquad z_\beta = W^{(\beta)} v + b^{(\beta)}, \qquad W^{(\alpha)}, W^{(\beta)} \in \R^{1 \times d_h}$$
+	$$\begin{gathered} z_\alpha = W^{(\alpha)} v + b^{(\alpha)}, \qquad z_\beta = W^{(\beta)} v + b^{(\beta)}, \\ W^{(\alpha)}, W^{(\beta)} \in \R^{1 \times d_h}\end{gathered}$$
 	Both read-outs consume the \emph{same} $v$: the hidden layer extracts one shared intermediate feature from which the two shape parameters are then predicted independently. This lets $\alpha$ and $\beta$ draw on common structure - both describe the same predictive distribution - while still being free to move in opposite directions, which is what allows the head to represent "high mean, low variance" and "high mean, high variance" as distinct outputs.
 
 	The network outputs the shape parameters as $\alpha = \text{softplus}(z_\alpha) + 1$ and $\beta = \text{softplus}(z_\beta) + 1$. The softplus, $\ln(1+e^{z})$, maps any real number to a positive one, which is all a Beta distribution formally requires ($\alpha, \beta > 0$). The added $1$ goes further: since softplus is strictly positive, it guarantees $\alpha, \beta > 1$.
@@ -202,10 +213,10 @@
 	Here $x$ is one window, and every $U$ is the per-frame predictive variance averaged over the window's frames; $U_{\text{multi}}$ is additionally averaged over the two role heads, and the unimodal average runs over all $M$ role-feature streams with equal weights.
 	
 	To handle non-stationary streaming data (i.e., test-time engagement signals that arrive continuously and whose statistical distribution drifts over time due to fatigue, cultural differences, sensor drift, etc.), the thresholds are not fixed but recomputed for every inference batch $\mathcal{W}$ of $B_{\text{inf}}$ consecutive windows from one session:
-	$$
-	\gamma_m = \mathrm{Quantile}_{q_m}\Bigl(\bigl\{U_{\text{multi}}(x)\bigr\}_{x \in \mathcal{W}}\Bigr), \qquad
-	\gamma_u = \mathrm{Quantile}_{q_u}\Bigl(\Bigl\{\tfrac{1}{M}\textstyle\sum_{i} U_i(x)\Bigr\}_{x \in \mathcal{W}}\Bigr),
-	$$
+	$$\begin{aligned}
+	\gamma_m &= \mathrm{Quantile}_{q_m}\Bigl(\bigl\{U_{\text{multi}}(x)\bigr\}_{x \in \mathcal{W}}\Bigr), \\
+	\gamma_u &= \mathrm{Quantile}_{q_u}\Bigl(\Bigl\{\tfrac{1}{M}\textstyle\sum_{i} U_i(x)\Bigr\}_{x \in \mathcal{W}}\Bigr),
+	\end{aligned}$$
 	with $q_m = 0.3$, $q_u = 0.7$ and $B_{\text{inf}} = 16$. $\mathrm{Quantile}_q$ of a set of numbers is the value below which a fraction $q$ of them lies. With $q_m = 0.3$, $\gamma_m$ is the $30$th percentile of the fused-head uncertainties in the batch, so the first condition, $U_{\text{multi}}(x) < \gamma_m$, keeps the $30\%$ of windows on which the multimodal head is \emph{most} confident (five of the $16$). With $q_u = 0.7$, $\gamma_u$ is the $70$th percentile of the averaged unimodal uncertainties, so the second condition keeps the $30\%$ of windows on which the unimodal heads are \emph{least} confident. A window is used for adaptation only if it belongs to both groups. If the two uncertainties were unrelated, about $0.3 \times 0.3 = 9\%$ of the windows would qualify; in practice it was $2$ to $6\%$ (Section \ref{sec:results}).
 
 	The thresholds are computed afresh for every batch, from that batch's own $B_{\text{inf}}$ windows rather than from a running history. With $10$ s windows and a $5$ s window hop, one batch covers about $85$ s of the interaction, so the thresholds follow drift within a session while selection and update run as one batched operation. Here "non-stationary streaming data" means the incoming test distribution is not fixed but changes gradually; recomputing the thresholds on every batch tracks this drift. The batch must contain several windows: batches with fewer than four windows (the last, partial batch of a session) are left unadapted.
@@ -221,7 +232,7 @@
 		\item \textbf{Parametric Beta (Aleatoric Uncertainty):}  
 		This is the direct predictive variance obtained from the dual-head Beta output:
 		$$
-		U(x) = \mathrm{Var}[y] = \frac{\hat{\alpha}(x)\hat{\beta}(x)}{(\hat{\alpha}(x)+\hat{\beta}(x))^2(\hat{\alpha}(x)+\hat{\beta}(x)+1)}.
+		\begin{aligned}U(x) &= \mathrm{Var}[y] \\ &= \frac{\hat{\alpha}(x)\hat{\beta}(x)}{(\hat{\alpha}(x)+\hat{\beta}(x))^2(\hat{\alpha}(x)+\hat{\beta}(x)+1)}.\end{aligned}
 		$$
 		Because the variance is computed analytically from the learned shape parameters, it is the fastest and default choice for the TTA filter, and it is the quantity actually used by the implemented selection rule $S(x)$. It measures only aleatoric uncertainty: a single network with fixed weights can express how noisy it expects the target to be for a given input, but it has no means of expressing doubt about its own weights, and on an input unlike anything seen in training it can be confidently wrong.
 		
@@ -236,8 +247,8 @@
 		\item \textbf{Total Uncertainty (Hybrid):}  
 		Using the law of total variance, the full predictive uncertainty decomposes as
 		$$
-		U_{\text{total}}(x) = \underbrace{\frac{1}{T}\sum_{t=1}^T \mathrm{Var}\bigl[\mathrm{Beta}(\hat{\alpha}^{(t)},\hat{\beta}^{(t)})\bigr]}_{\text{aleatoric (data)}} 
-		+ \underbrace{\frac{1}{T}\sum_{t=1}^T \bigl(\hat{\mu}^{(t)}(x) - \bar{\mu}(x)\bigr)^2}_{\text{epistemic (model)}}.
+		\begin{aligned}U_{\text{total}}(x) = {}&\underbrace{\frac{1}{T}\sum_{t=1}^T \mathrm{Var}\bigl[\mathrm{Beta}(\hat{\alpha}^{(t)},\hat{\beta}^{(t)})\bigr]}_{\text{aleatoric (data)}} \\
+		&+ \underbrace{\frac{1}{T}\sum_{t=1}^T \bigl(\hat{\mu}^{(t)}(x) - \bar{\mu}(x)\bigr)^2}_{\text{epistemic (model)}}.\end{aligned}
 		$$
 		It captures both kinds because the law of total variance splits the variance of the mixture of the $T$ predicted distributions exactly into these two parts. The decomposition is mainly used as a diagnostic to monitor whether the shift is mostly epistemic.
 	\end{enumerate}
@@ -250,11 +261,11 @@
 	\label{sec:objective}
 	
 	The likelihood we train on and the metric we are scored by ask different questions. The Beta negative log-likelihood looks at one frame at a time and asks whether the predicted distribution is right there. CCC looks at all frames together and asks whether the predictions rise and fall in the same pattern as the targets. A model can therefore place a sensible distribution on every frame and still order the frames badly. Take two frames whose true engagement is $0.55$ and $0.60$, and a model that predicts them the wrong way round, $0.60$ and $0.55$, each with a moderately wide distribution (concentration $\kappa = 10$, a standard deviation of about $0.15$). Each prediction is only $0.05$ away from its target, well inside its own spread, so the likelihood barely notices: the summed negative log-likelihood of the two frames rises by only about $0.1$ nats compared with the correct predictions. Yet the model now claims that the second frame is \emph{less} engaged than the first, which is precisely the kind of error CCC penalises. Over a whole session, a model whose predictions stay close to the true level but wobble in directions unrelated to the true ups and downs can achieve a good likelihood and a poor correlation at the same time. We therefore add three terms to the likelihood,
-	$$\mathcal{L} = \underbrace{\frac{1}{|\mathcal{R}|}\sum_{r \in \mathcal{R}} \mathcal{L}_{\text{NLL}}^{w}\bigl(\alpha^{r}, \beta^{r}, y^{r}\bigr)}_{\text{per-frame fit}} \;+\; \underbrace{\lambda_c\bigl(1 - \widehat{\text{CCC}}\bigr)}_{\text{ordering}} \;+\; \underbrace{\frac{\lambda_u}{M}\sum_{i=1}^{M} \mathcal{L}_{\text{NLL}}^{w}\bigl(\alpha_i, \beta_i, y^{r(i)}\bigr)}_{\text{per-modality supervision}} \;+\; \underbrace{\lambda_f\,\mathcal{L}_{\text{fair}}}_{\text{fairness}},$$
+	$$\begin{aligned}\mathcal{L} = {}&\underbrace{\frac{1}{|\mathcal{R}|}\sum_{r \in \mathcal{R}} \mathcal{L}_{\text{NLL}}^{w}\bigl(\alpha^{r}, \beta^{r}, y^{r}\bigr)}_{\text{per-frame fit}} \;+\; \underbrace{\lambda_c\bigl(1 - \widehat{\text{CCC}}\bigr)}_{\text{ordering}} \\ &+\; \underbrace{\frac{\lambda_u}{M}\sum_{i=1}^{M} \mathcal{L}_{\text{NLL}}^{w}\bigl(\alpha_i, \beta_i, y^{r(i)}\bigr)}_{\text{per-modality supervision}} \;+\; \underbrace{\lambda_f\,\mathcal{L}_{\text{fair}}}_{\text{fairness}},\end{aligned}$$
 	where $r(i)$ denotes the role of stream $i$, and $\lambda_c, \lambda_u, \lambda_f \ge 0$ set how much each term counts.
 	
 	\textbf{Reweighting the likelihood.} Describe a Beta density by its mean $\mu = \alpha/(\alpha+\beta)$ and its precision $\kappa = \alpha+\beta$, so $\alpha = \mu\kappa$ and $\beta = (1-\mu)\kappa$; large $\kappa$ means a narrow, confident distribution. Differentiating $\ln p(y) = (\alpha-1)\ln y + (\beta-1)\ln(1-y) - \ln B(\alpha,\beta)$ with respect to $\mu$, with $\partial\alpha/\partial\mu = \kappa$ and $\partial\beta/\partial\mu = -\kappa$, and using $\ln B(\alpha,\beta) = \ln\Gamma(\alpha)+\ln\Gamma(\beta)-\ln\Gamma(\alpha+\beta)$ so that $\partial \ln B/\partial\alpha = \psi(\alpha)-\psi(\alpha+\beta)$ and $\partial \ln B/\partial\beta = \psi(\beta)-\psi(\alpha+\beta)$, the $\psi(\alpha+\beta)$ terms cancel and leave
-	$$\frac{\partial\bigl(-\ln p\bigr)}{\partial \mu} = \kappa\left[\ln\frac{1-y}{y} + \psi(\mu\kappa) - \psi\bigl((1-\mu)\kappa\bigr)\right] \;\propto\; \kappa .$$
+	$$\begin{aligned}\frac{\partial\bigl(-\ln p\bigr)}{\partial \mu} &= \kappa\left[\ln\frac{1-y}{y} + \psi(\mu\kappa) - \psi\bigl((1-\mu)\kappa\bigr)\right] \\ &\propto\; \kappa .\end{aligned}$$
 	The correction the mean receives is thus multiplied by the model's own confidence, so frames it is already sure about push hardest and frames it is unsure about barely move it - the opposite of what we want, since the uncertain frames are the ones with something left to learn. This is a known failure of likelihood training with predicted uncertainty \cite{seitzer2022}. We fix it by scaling each frame's loss by $w_t = \kappa_t^{-\beta_w}$, giving $\mathcal{L}_{\text{NLL}}^{w} = \sum_t w_t \mathcal{L}_{\text{NLL},t} / \sum_t w_t$ and a correction proportional to $\kappa^{1-\beta_w}$; $\beta_w = 0$ leaves the likelihood untouched and $\beta_w = 1$ removes the confidence factor completely, and we use $\beta_w = 0.5$. Crucially $w_t$ is computed from the current $\alpha_t, \beta_t$ but treated as a fixed number when derivatives are taken, so no gradient flows back through it. Were it differentiable, $w_t$ would become part of the objective: the model could then lower the loss by shifting its confidence so as to shrink the weight, rather than by predicting better, and the best $\kappa$ would no longer be the one the likelihood asks for. Treated as a constant, $w_t$ changes only how strongly each frame pulls, not where the pull ends - any point at which every frame's likelihood gradient vanishes is still a stationary point of the weighted loss. In practice $w_t$ is recomputed from the current prediction at every training step and discarded after the update; it is never learned. The ablation of Section \ref{sec:results} measures what the reweighting contributes.
 	
 	\textbf{Ordering term.} $\widehat{\text{CCC}}$ is the sample concordance coefficient of Section \ref{sec:ccc} computed on the predicted means and the targets of the current minibatch, pooled across both roles and all frames in it. Every ingredient - the two means, the two variances, the covariance - is a smooth function of the predictions, so the term can be differentiated, and since $\text{CCC} = \rho\,C_b$, minimising $1-\widehat{\text{CCC}}$ pushes on exactly the factor the likelihood leaves loose. Two limitations follow from estimating it on a batch. It is biased when the batch is small, because the same frames supply both the moments and the ratio built from them; and it reflects the pooled quantity we are scored on only if the batch spans several sessions, since a batch from one session measures ordering within that session alone. Batches are accordingly assembled from windows drawn at random from all sessions of the training split; Section \ref{sec:batches} shows how much this matters.
@@ -275,7 +286,7 @@
 	where the closed-form Beta KL divergence, with $ B_i := B(\alpha_i,\beta_i) $, is:
 	\begin{equation}
 		\label{eq:beta_kl}
-		D_{\text{KL}}(B_1 \parallel B_2) = \ln \frac{B(\alpha_2,\beta_2)}{B(\alpha_1,\beta_1)} + (\alpha_1 - \alpha_2)\psi(\alpha_1) + (\beta_1 - \beta_2)\psi(\beta_1) + (\alpha_2 - \alpha_1 + \beta_2 - \beta_1)\psi(\alpha_1 + \beta_1)
+		\begin{aligned}D_{\text{KL}}(B_1 \parallel B_2) &= \ln \frac{B(\alpha_2,\beta_2)}{B(\alpha_1,\beta_1)} + (\alpha_1 - \alpha_2)\psi(\alpha_1) \\ &\quad + (\beta_1 - \beta_2)\psi(\beta_1) \\ &\quad + (\alpha_2 - \alpha_1 + \beta_2 - \beta_1)\psi(\alpha_1 + \beta_1)\end{aligned}
 	\end{equation}
 	
 	The final TTA loss combines the MIS consistency term with a supervision term that treats the multimodal mean as a pseudo-target for each unimodal head:
@@ -353,7 +364,7 @@
 	In deep learning, the Gumbel-Max trick \cite{jang2017} leverages this distribution to draw discrete samples from a categorical distribution in a fully differentiable manner. By adding independent Gumbel noise to unnormalized log-probabilities (scores), the deterministic argmax of these perturbed values becomes mathematically equivalent to drawing a sample from the true underlying multinomial distribution. 
 	
 	To generate standard Gumbel noise ($\mu=0, \beta=1$) programmatically, we apply inverse transform sampling. This technique maps a standard uniform random variable to a target distribution by passing it through the inverse of that target's cumulative distribution function (CDF). Given that the standard Gumbel CDF is $F(x) = e^{-e^{-x}}$, setting a uniform random variable $U \sim \mathrm{Uniform}(0,1)$ equal to $F(x)$ and solving explicitly for $x$ yields the inverse mapping $x = -\ln(-\ln U)$. In practice $U$ is drawn from the open interval $(\epsilon, 1-\epsilon)$ with $\epsilon = 10^{-6}$, since the double logarithm diverges at both endpoints. Thus, to enable stochastic exploration of orderings during training, the score matrix $Z$ is perturbed with i.i.d.\ standard Gumbel noise and scaled by a temperature parameter $\tau > 0$:
-	$$\tilde{Z}_{ij} = \frac{Z_{ij} + G_{ij}}{\tau}, \qquad G_{ij} = -\ln(-\ln U_{ij}), \quad U_{ij} \overset{\text{i.i.d.}}{\sim} \mathrm{Uniform}(0,1).$$
+	$$\begin{gathered}\tilde{Z}_{ij} = \frac{Z_{ij} + G_{ij}}{\tau}, \\ G_{ij} = -\ln(-\ln U_{ij}), \quad U_{ij} \overset{\text{i.i.d.}}{\sim} \mathrm{Uniform}(0,1).\end{gathered}$$
 	The temperature $\tau$ is annealed over the course of training to progressively concentrate probability mass towards a single hard permutation. We adopt a standard exponential decay schedule, updating the temperature at each epoch $t$ via $\tau_t = \max(\tau_\infty, \tau_0 \cdot \gamma^t)$, where $\gamma \in (0, 1)$ represents the decay rate, starting from an initial exploration temperature $\tau_0$ down to a tight categorical approximation threshold $\tau_\infty$. Concrete values are listed in Appendix \ref{sec:hyper}.
 	
 	\subsubsection*{Sinkhorn normalisation}
@@ -369,17 +380,17 @@
 	$\{x_1,\dots,x_n\}$ as
 	$$\operatorname*{logsumexp}_{j} x_j \;:=\; \log \sum_{j=1}^{n} \exp(x_j),$$
 	that is, the logarithm of the sum of the exponentials. Its role here follows from a single identity. If a set of quantities is held in logarithmic form, $x_j = \log p_j$, then normalising them to sum to one, $p_j \mapsto p_j / \sum_{j'} p_{j'}$, becomes in logarithms
-	$$\log\!\left(\frac{p_j}{\sum_{j'} p_{j'}}\right) = \log p_j - \log \sum_{j'} p_{j'} = x_j -
-	\operatorname*{logsumexp}_{j'} x_{j'} .$$
+	$$\begin{aligned}\log\!\left(\frac{p_j}{\sum_{j'} p_{j'}}\right) &= \log p_j - \log \sum_{j'} p_{j'} \\ &= x_j -
+	\operatorname*{logsumexp}_{j'} x_{j'} .\end{aligned}$$
 	A normalisation is therefore a \emph{subtraction} in log-space, never a division, and the sums themselves are never formed. Crucially, log-sum-exp is evaluated by first factoring out the largest element, $m = \max_j x_j$,
 	$$\operatorname*{logsumexp}_{j} x_j = m + \log \sum_{j} \exp(x_j - m),$$
 	which is algebraically exact and guarantees every exponential argument is non-positive, so no term can exceed $1$ and overflow cannot occur regardless of how large the $x_j$ become.
 	
 	Writing $\log Q^{(k)}$ for the matrix obtained after the row pass of iteration $k$, and $\log P^{(k+1)}$ for the result after the subsequent column pass, the scheme is
 	$$ \log P^{(0)} = \tilde{Z}, $$
-	$$ \log Q^{(k)}_{ij} = \log P^{(k)}_{ij} - \operatorname*{logsumexp}_{j'} \log P^{(k)}_{ij'},
-	\qquad
-	\log P^{(k+1)}_{ij} = \log Q^{(k)}_{ij} - \operatorname*{logsumexp}_{i'} \log Q^{(k)}_{i'j}, $$
+	$$\begin{aligned} \log Q^{(k)}_{ij} &= \log P^{(k)}_{ij} - \operatorname*{logsumexp}_{j'} \log P^{(k)}_{ij'},
+	\\
+	\log P^{(k+1)}_{ij} &= \log Q^{(k)}_{ij} - \operatorname*{logsumexp}_{i'} \log Q^{(k)}_{i'j}, \end{aligned}$$
 	for $k = 0,\dots,n_{\text{iter}}-1$, with $P = \exp\bigl(\log P^{(n_{\text{iter}})}\bigr)$ returned only at the end. The first update normalises each row (the inner index runs over columns $j'$), the second normalises each column (the inner index runs over rows $i'$); $Q^{(k)}$ is simply the intermediate that is row-stochastic but not yet column-stochastic, and it is discarded once the column pass consumes it. Alternating the two passes is what drives the matrix towards satisfying both constraints at once.
 	
 	This is algebraically identical to Sinkhorn-Knopp on $\exp(\tilde{Z})$ - each step divides by a row or column sum, which by the identity above is a subtraction of its logarithm - but the largest intermediate quantity is $\max_j \tilde{Z}_{ij}$ rather than $\exp(\max_j \tilde{Z}_{ij})$. The exponential map is applied once, at the end, to values that are by construction non-positive log-probabilities, so the returned entries lie in $(0,1]$ and the gradient operator $\partial P / \partial Z$ remains well-conditioned throughout optimisation.
@@ -410,7 +421,7 @@
 
 	Following the challenge protocol \cite{withanage25}, the headline score is the \textbf{unweighted mean CCC across the four held-out test sets} - NoXi, NoXi+J, NoXi (Additional Languages), and MPIIGroupInteraction:
 	$$
-	\text{CCC}_{\text{combined}} = \frac{1}{4}\sum_{d \in \mathcal{D}} \text{CCC}_d, \qquad \mathcal{D} = \{\text{NoXi},\ \text{NoXi+J},\ \text{NoXi-Add},\ \text{MPIIGI}\}.
+	\begin{gathered}\text{CCC}_{\text{combined}} = \frac{1}{4}\sum_{d \in \mathcal{D}} \text{CCC}_d, \\ \mathcal{D} = \{\text{NoXi},\ \text{NoXi+J},\ \text{NoXi-Add},\ \text{MPIIGI}\}.\end{gathered}
 	$$
 	Because every test set enters with the same weight $\tfrac{1}{4}$, each counts equally, however many sessions or frames it contains - unlike a score pooled over all frames, in which the largest test set would dominate and a poor result on a small one would barely register. Within the mean, the scores of different test sets do offset each other one-to-one: $0.8$ on NoXi and $0.2$ on NoXi+J (with the other two scores fixed) give the same combined score as $0.5$ on both. MultiMediate'26 additionally reports a global score that adds PInSoRo, a classification task with categorical ground truth, with weight $\tfrac{1}{3}$ and gives each of the four sets above $\tfrac{1}{6}$.
 
@@ -418,11 +429,11 @@
 	CCC can be decomposed into two factors. The first measures whether the prediction moves together with the target: whether frames that are more engaged than others also receive higher predictions than those others, so that the predicted curve rises and falls where the true one does. When this holds we say that the prediction \emph{orders} the target well. (Strictly, the Pearson correlation measures linear agreement rather than rank order; we use ``ordering'' loosely for it.) The second factor measures whether the prediction's level and spread \emph{match} those of the target. Define the scale ratio and the normalised mean offset
 	$$\varphi := \frac{\sigma_{\hat{y}}}{\sigma_y} > 0, \qquad \omega := \frac{\mu_{\hat{y}} - \mu_y}{\sqrt{\sigma_{\hat{y}}\sigma_y}},$$
 	and divide numerator and denominator of the CCC by $\sigma_{\hat{y}}\sigma_y$:
-	$$
+	$$\begin{gathered}
 	\frac{2\rho}{\dfrac{\sigma_{\hat{y}}}{\sigma_y} + \dfrac{\sigma_y}{\sigma_{\hat{y}}}
 	+ \dfrac{(\mu_{\hat{y}}-\mu_y)^2}{\sigma_{\hat{y}}\sigma_y}}
-	= \rho \cdot C_b, \qquad
-	C_b := \frac{2}{\varphi + \varphi^{-1} + \omega^{2}} . $$
+	= \rho \cdot C_b, \\
+	C_b := \frac{2}{\varphi + \varphi^{-1} + \omega^{2}} . \end{gathered}$$
 	Here $\rho$ is the Pearson correlation, which, following \cite{lin1989ccc}, we term the \emph{precision} of the predictor, and $C_b$ the bias-correction factor, its \emph{accuracy}. The names come from measurement. An instrument is precise when its readings are consistent with each other; correspondingly, $\rho$ is high when the predictions follow the ups and downs of the target closely, even if all of them are shifted or stretched by the same amount. An instrument is accurate when its readings are centred on the true value; correspondingly, $C_b$ equals $1$ when the predictions have the target's mean and spread, however well or badly they follow its ups and downs.
 	
 	\textbf{Proposition.} $\text{CCC}(\hat{y},y) \le \rho$, with equality iff $\sigma_{\hat{y}} = \sigma_y$ and $\mu_{\hat{y}} = \mu_y$.
@@ -469,7 +480,8 @@
 	\subsection{Seed Variability}
 	Training is stochastic: the initial weights, the order of training sessions and the Gumbel noise all depend on a random seed. Every configuration below was trained with at least three seeds ($95$, $1$, $2$; the two configurations that decide the final input set also $3$, $4$, $5$), and we report the mean and the sample standard deviation. The experiment of this subsection was made with the original single-session batches of Section \ref{sec:batches}.
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Seed variability and window length. Validation CCC (session level, as in the official scoring; higher is better) of three training seeds and their mean $\pm$ sample standard deviation, for $10$ s and $20$ s windows. Single-session batches, core features.}
 	\begin{tabular}{llccc c}
 		\toprule
@@ -483,7 +495,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	Bold marks the better window length within each corpus and column. The seed-to-seed standard deviation lies between $0.01$ and $0.05$, so single-run differences of that size carry no information. The $20$ s windows ($L = 500$, window hop $250$) were tested because after the S4D-Real initialisation the SSM can retain information for up to $\sim\!10^3$ steps, while a $10$ s window resets the state every $250$ steps. On NoXi the longer window changes nothing; on NoXi+J it raises the mean by $0.03$, but with a standard deviation of $0.054$ the difference is not established.
 
@@ -493,7 +505,8 @@
 
 	We therefore load the active streams of all training sessions into memory once and draw every batch from a random permutation of all windows of all sessions, re-shuffled each epoch; a batch now almost always mixes several sessions. The full objective was retrained under both schemes, three seeds each. In the table, $\Delta$ is the mixed-session mean minus the single-session mean, and the number in parentheses is the $p$-value of a two-sided Welch $t$-test \cite{welch1947} comparing the two groups of three seed scores. Welch's test asks whether two means differ by more than the spread within each group would explain, without assuming that both groups vary equally; $p$ is the probability of seeing a difference at least this large if the batch scheme in fact made no difference, and we call a difference significant when $p < 0.05$. For $|\text{CDD}_G|$ lower is better; bold marks the better scheme in each column.
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Batch composition. Validation CCC (mean $\pm$ sd over three seeds; higher is better) and mean absolute gender disparity $|\text{CDD}_G|$ (lower is better) for batches drawn from one session and batches mixed across sessions. $\Delta$: mixed minus single-session mean, Welch $p$-value in parentheses.}
 	\begin{tabular}{lcccc}
 		\toprule
@@ -506,7 +519,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	Mixing sessions improves NoXi+J significantly and NoXi in the same direction. The gender disparity on NoXi+J halves (per seed $0.009$, $0.016$, $0.012$, against $0.000$, $0.039$, $0.036$ before), but with three seeds the difference is not significant ($p = 0.41$). One NoXi+J seed was by mistake trained twice concurrently into the same directory; the two copies scored $0.585$ and $0.624$, of which the table uses the later one, and the improvement remains significant with either. All results from here on use mixed batches unless stated otherwise.
 
@@ -515,7 +528,8 @@
 
 	We ran the whole ablation twice, once under each batch scheme of Section \ref{sec:batches}, since the scheme turned out to matter. Each entry is the difference between the variant's three-seed mean and that of the full objective under the same scheme, with the Welch $p$-value of Section \ref{sec:batches} in parentheses. A negative difference means that the score dropped when the component was removed, i.e.\ that the component was helping. Bold marks the largest drop in each column, and $^{*}$ marks $p < 0.05$.
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Ablation of the training objective. First row: validation CCC of the full objective (mean $\pm$ sd over three seeds; higher is better). Other rows: change of the mean CCC when one component is switched off (negative means the component helped), Welch $p$-value in parentheses, under both batch schemes. $10$ s windows, core features.}
 	\small
 	\begin{tabular}{lcccc}
@@ -532,7 +546,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	\textbf{Ordering term.} With single-session batches, removing $\lambda_c(1 - \widehat{\text{CCC}})$ causes the largest loss and the only individually significant one: on NoXi+J the mean falls from $0.529$ to $0.396$. With mixed batches its removal has no measurable effect. A plausible explanation, which we have not tested directly, is that a single-session batch shows the likelihood only one conversation at a time, so it cannot learn that one session is on the whole more engaged than another, and the ordering term compensates for this; once a batch mixes sessions, the likelihood sees those differences itself. Whatever the mechanism, the result shows that the value of a loss term cannot be judged independently of how the batches it is computed on are composed.
 
@@ -540,7 +554,8 @@
 
 	\textbf{Fairness term.} With single-session batches, removing it changes nothing measurable. With mixed batches, removing it lowers the mean by about $0.027$ on both corpora ($p = 0.06$ and $0.26$); in other words, keeping the term slightly \emph{raised} accuracy, although it was added for fairness and not for accuracy. A possible explanation is that it acts as a regulariser - an extra constraint that keeps the model from fitting peculiarities of the training data too closely and so helps it generalise - but we have not tested this, and the effect is not significant. Its effect on the quantity it was designed for is not measurable in either scheme (lower is better; bold marks the lowest value in each column):
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Effect of the fairness term on fairness. Mean absolute gender disparity $|\text{CDD}_G|$ over three seeds (lower is better) with and without the fairness penalty, under both batch schemes; $p$ from Welch's test against $\lambda_f = 0.05$.}
 	\small
 	\begin{tabular}{llcc}
@@ -554,7 +569,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	\textbf{What the ablation can and cannot show.} With three seeds per group and a seed standard deviation of $0.01$ to $0.03$, only differences of roughly $0.04$ or more are detectable. Moreover, when eight comparisons are made at once, the chance that at least one of them reaches $p < 0.05$ by luck alone is far larger than $5\%$. The Holm correction \cite{holm1979} compensates for this: the $p$-values are sorted, the smallest is multiplied by the number of comparisons ($8$), the next by $7$, and so on, and a result counts as significant only if its corrected value stays below $0.05$. In the mixed-batch ablation the smallest $p$-value, $0.055$ (shown as $0.06$ in the table), becomes $0.44$, so none of the eight differences is significant. We therefore keep the full objective: no term is shown to hurt, and dropping one on the basis of these differences would itself be a decision made on noise.
 
@@ -562,7 +577,8 @@
 	\label{sec:features}
 	The model so far reads the four core streams (eGeMAPS, W2v-BERT, OpenFace2, OpenPose). All ten feature types of the challenge release are available for every split of both corpora, test included. We added them in groups to the core set: text (the XLM-RoBERTa embedding of the transcript), image embeddings (DINO, ImageBind, Swin), video embeddings (VideoMAE, CLIP), and all ten together. The core set and core plus text were trained with six seeds, the others with three; $\Delta$ and $p$ (Welch, as in Section \ref{sec:batches}) are relative to the core set. Bold marks the best value in each column.
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Input feature sets. Validation CCC (mean $\pm$ sd over seeds; higher is better) when feature groups are added to the four core streams; $\Delta$ and Welch $p$ relative to the core set. Six seeds for the core set and core plus text, three for the others. $^{*}$ All ten streams score marginally higher on NoXi+J ($0.6412$ against $0.6406$), far below the seed-to-seed spread, while taking about $2.5$ times longer to train, varying twice as much across seeds and scoring lower on NoXi; we therefore count core plus text as the best input set.}
 	\small
 	\begin{tabular}{lcccccc}
@@ -578,7 +594,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	The text stream is the only addition that helps, and on NoXi+J it does so significantly. The two input sets that contain it are the two best on NoXi+J, and all three sets without it are at or below the core set; adding all ten streams brings nothing over text alone and takes about $2.5$ times longer to train. On NoXi the text stream is neutral. The image embeddings add nothing, and the video embeddings significantly harm NoXi+J. We adopt core plus text as the final input set.
 
@@ -588,7 +604,8 @@
 	\label{sec:dynamics}
 	The pooled CCC rewards two things: placing each person's overall level of engagement correctly relative to the other people, and following the changes within each person's session. To see which of the two limits the final models, we split the prediction for each person (one role in one session, $20$ people per corpus) into its mean and the deviations from that mean, and replace one part at a time by the truth. \emph{True level} keeps our deviations but shifts each person's prediction to the true mean; \emph{true dynamics} keeps our mean but uses the true deviations; \emph{level only} predicts each person's true mean as a constant.
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Level versus within-person dynamics, final models (mean over six seeds). Validation CCC (higher is better) of the prediction as it is and with one part replaced by the truth: each person's mean (true level), the deviations from it (true dynamics), or the true mean alone. Also the share of the label variance between people, and the Pearson correlation of the person means and within persons.}
 	\small
 	\begin{tabular}{lcc}
@@ -605,7 +622,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	The level is largely right: the predicted person means correlate at $0.90$ with the true ones, and a perfect level would add only $0.04$ to $0.05$. With perfect dynamics the CCC would reach $0.95$. Within a person, however, the prediction correlates with the annotation at only $0.47$ on NoXi and $0.60$ on NoXi+J. The remaining error therefore lies in following engagement within a session, not in its overall level.
 
@@ -613,7 +630,8 @@
 
 	To see which timescales are missed, we split each person's deviation from their mean with centred moving averages of $2$, $10$ and $60$ s into four bands, fast ($< 2$ s), mid ($2$ to $10$ s), slow ($10$ to $60$ s) and very slow ($> 60$ s), which add up to the deviation exactly. For each band we report its share of the within-person label variance, the mean within-person correlation between the prediction's and the label's band, and the pooled CCC if that band of the prediction were replaced by the truth (final models, mean over six seeds; CCC $0.731$ on NoXi and $0.641$ on NoXi+J):
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Error by timescale, final models. Each person's deviation from their mean is split into four bands: share of the within-person label variance in each band, Pearson $r$ between predicted and true band (higher is better), and the validation CCC if that band alone were predicted perfectly. The variance shares do not add up to $100\%$ because the moving-average bands are not exactly uncorrelated. The gains of different bands overlap and do not add up either.}
 	\small
 	\begin{tabular}{lcccccc}
@@ -628,7 +646,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	Most of the within-person variance, $73\%$ on NoXi and $81\%$ on NoXi+J, changes more slowly than the $10$ s window, and these bands also hold most of the missing score: the very slow band alone would add $0.11$ on NoXi, where the model follows it worst ($r = 0.45$), and the slow band $0.15$ on NoXi+J. Every window starts from a zero state, so a change slower than the window has to be inferred anew from $10$ s of evidence in each window. The bands below $10$ s hold little variance and would add at most $0.07$.
 
@@ -638,7 +656,8 @@
 	$$z = \text{BiMamba}(H W_z) \in \R^{L' \times C'}, \qquad W_z \in \R^{MC' \times C'},$$
 	with the structure and initialisation of the intra-modal block (convolution width $4$), and let both multimodal heads read the concatenation $[H, z]$, so that the frame-wise path is unchanged. This adds $0.26$M parameters ($2.06$M to $2.33$M). Six seeds each, compared with the final models of Section \ref{sec:features}:
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Temporal block after fusion. Validation CCC (mean $\pm$ sd over six seeds; higher is better) without and with the temporal BiMamba after fusion, their difference with the Welch $p$-value, and for the frame-wise mean of the six models (not rescaled) the CCC and the within-person Pearson $r$.}
 	\small
 	\begin{tabular}{lcc}
@@ -656,7 +675,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	On NoXi+J the temporal block raises the CCC by $0.043$; the difference stays significant after the Holm correction over the two corpora ($p = 0.012$), and each of the six seeds scores higher than the final model with the same seed. The gain comes from where the previous subsection located the error: the within-person correlation rises from $0.69$ to $0.75$. The mean of the six models reaches $0.729$ without rescaling, above the earlier rescaled ensemble ($0.714$). On NoXi the block has no effect. This fits the variance split above: on NoXi+J three quarters of the label variance lie within a person, on NoXi only half. Both runs use the first implementation of the ordering layer (Appendix \ref{sec:fixedorder}). The ensembles and the new test predictions use the longer windows of Section \ref{sec:longwindows} instead.
 
@@ -664,7 +683,8 @@
 	\label{sec:longwindows}
 	Section \ref{sec:dynamics} found most of the within-person variance, and most of the missing score, in changes slower than the $10$ s window. We therefore lengthen the window. A $60$ s window has $1500$ frames and the stride is $750$; one extra window ending at the last frame covers the end of the session, which the regular stride would leave to the last predicted value. Memory grows with the number of frames per batch, so the batch shrinks from $8$ to $4$ windows ($2$ for $120$ s), and since an epoch then has fewer updates, training runs for up to $100$ epochs. All runs keep the temporal block after fusion (Section \ref{sec:fusiontemporal}). A control with $10$ s windows and batches of $4$ separates the effect of the window from that of the smaller batch.
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Window length and batch size. Validation CCC (mean $\pm$ sd over the given number of seeds; higher is better) for windows of $10$ to $120$ s and batches of $2$ to $8$ windows, all with the temporal block after fusion. Empty cells were not run.}
 	\small
 	\begin{tabular}{lcccc}
@@ -681,13 +701,14 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	On NoXi+J the $60$ s window raises the CCC by $0.044$ over $10$ s windows ($p = 0.005$, Welch; $p = 0.0003$ paired by seed), and each of the six seeds scores higher. The smaller batch explains little of it: on the same three seeds the control with batches of $4$ stays $0.036$ below the $60$ s windows (paired $p = 0.012$). Doubling the window to $120$ s gives the same score ($-0.001$ on the same seeds).
 
 	To see where the gain comes from, we repeat the analysis of Section \ref{sec:dynamics} for the six single models with $10$ and with $60$ s windows on NoXi+J:
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Where the $60$ s windows gain on NoXi+J (mean over six single models). CCC with each person's true level, Pearson $r$ of the predicted and true person means, mean within-person $r$, and $r$ in each band of Section \ref{sec:dynamics}; higher is better throughout.}
 	\small
 	\begin{tabular}{lcc}
@@ -704,7 +725,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	Both parts improve: each person's level is placed better, and within a person the prediction follows the label more closely. Within a person the gain lies mainly in the very slow band, while the slow band from $10$ to $60$ s, which Section \ref{sec:dynamics} singled out, barely changes. A $60$ s window cannot resolve changes slower than itself either. Presumably it gives each window more evidence for the person's current level, and the overlapping windows, half a minute apart, then follow that level as it drifts over the session.
 
@@ -722,7 +743,8 @@
 	\subsection{Cross-Corpus Transfer: a Shift in Label Scale}
 	The analyses of this and the next subsection were made with models trained on single-session batches and core features (Sections \ref{sec:batches} and \ref{sec:features}); we have not repeated them in the final setting, but nothing in them depends on those choices. A model trained on one corpus and evaluated on the other scores close to zero. The decomposition $\text{CCC} = \rho\,C_b$ of Section \ref{sec:ccc} shows where the loss arises:
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Cross-corpus transfer. Validation CCC (higher is better), its decomposition into the correlation $\rho$ and the bias correction $C_b$ (both at most $1$; $\text{CCC} = \rho\,C_b$), and the mean prediction $\hat{y}$ and mean label $y$. Single-session batches, core features. $^{\dagger}$ An earlier NoXi+J model, trained with learning rate $5 \times 10^{-4}$.}
 	\begin{tabular}{llccccc}
 		\toprule
@@ -735,7 +757,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	Across corpora the correlation stays at $0.42$ to $0.45$, against $0.53$ to $0.70$ within a corpus: the models still order frames reasonably well on unseen data. What collapses is the accuracy factor $C_b$, and the reason is visible in the means. The NoXi+J annotations average $0.834$, the NoXi annotations $0.570$, and each model continues to predict at the level of the corpus it was trained on. Take the NoXi model on NoXi+J: its predictions rise and fall roughly where the annotations do, but the whole predicted curve sits about $0.26$ below the annotated one (mean $0.577$ against $0.834$). Measured against the spread of the two curves (standard deviations $0.090$ and $0.102$), this offset is large, $\omega \approx -2.7$, and since $\displaystyle C_b = \frac{2}{\varphi + \varphi^{-1} + \omega^2}$ with $\varphi + \varphi^{-1} \approx 2.02$, it alone pulls $C_b$ down to about $2/9.2 \approx 0.22$; the difference in spread would by itself only cost about $1\%$. The NoXi+J model on NoXi shows the mirror image, predicting $0.245$ too high. The two corpora therefore differ mainly in the \emph{scale} of their engagement labels - a shift in the label distribution, not in the input features. Our data cannot tell whether this reflects genuinely more engaged participants or a different use of the rating scale by the annotators of the two corpora.
 
@@ -745,7 +767,8 @@
 	\label{sec:ttaresults}
 	Test-time adaptation was evaluated with the implementation of Section \ref{sec:tta}, in the cross-corpus setting it was designed for (NoXi model on NoXi+J) and in-corpus (NoXi+J model on NoXi+J).
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Test-time adaptation on whole sessions, across corpora (trained on NoXi, evaluated on NoXi+J) and within NoXi+J. Fraction of windows selected by the filter and validation CCC (higher is better) for each setting of the quantiles $(q_m, q_u)$ and the learning rate $\eta_{\text{TTA}}$. $^{\ddagger}$ Estimated from the first three sessions; the fraction was not logged for the full run. Bold marks the best CCC in each column.}
 	\begin{tabular}{lcccc}
 		\toprule
@@ -760,7 +783,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	The row "No adaptation" is the trained model on its own. Within its corpus it generalises to the unseen validation sessions as expected ($0.53$ on NoXi+J); across corpora it fails ($0.09$), for the label-scale reason of the previous subsection. Adaptation does not change this picture. No setting changes the cross-corpus score by more than $0.004$. In-corpus, the smaller learning rate is neutral within seed noise ($+0.004$) and the larger one is harmful ($-0.05$ to $-0.11$). At the design quantiles $(0.3, 0.7)$ the filter selects only $2$ to $6\%$ of the windows, far below the $9\%$ that two independent conditions of $30\%$ each would give; presumably the fused and the unimodal uncertainties tend to rise and fall together, which makes the joint condition rare, although we have not measured this correlation. Taken together with the previous subsection, the result is a clear negative one: in its current form the adaptation neither closes the cross-corpus gap, which lies in the label scale, nor improves in-corpus predictions, and with a larger learning rate it makes them worse. All other results in this document are obtained without it.
 
@@ -773,7 +796,8 @@
 	$$\hat{y}'_t = \mu_{\text{ens}} + \bigl(\hat{y}_t - \mu_{\text{ens}}\bigr)\,\frac{\bar{\sigma}_{\text{mem}}}{\sigma_{\text{ens}}}.$$
 	Here $\hat{y}_t$ is the ensemble prediction (the frame-wise average of the members), and $\mu_{\text{ens}}$ and $\sigma_{\text{ens}}$ are the mean and standard deviation of this averaged curve over all frames of the split. $\bar{\sigma}_{\text{mem}}$ is computed the other way round: first the standard deviation of each member's own curve, then the average of these six numbers. The two orders of operation give different results for the spread - the spread of an average is smaller than the average spread, unless all members agree perfectly - and that difference is exactly what the stretch undoes; on NoXi+J the factor is $0.086 / 0.078 \approx 1.10$. For the level, both orders give the same number, since the mean of the averaged curve equals the average of the members' means, so the mean is left where it is. The result is clipped to $[0,1]$. Only predictions enter this transformation, never annotations, so it applies unchanged to the test split. Being affine, it leaves $\rho$ untouched and can only move $C_b$.
 
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Ensembling, final configuration. Validation CCC (higher is better) of single models and of the frame-wise mean of six seeds, before and after label-free rescaling, with the correlation $\rho$ and the bias correction $C_b$ ($\text{CCC} = \rho\,C_b$).}
 	\begin{tabular}{lcccccc}
 		\toprule
@@ -786,12 +810,13 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 
 	Ensembling raises the correlation itself, which is precisely the factor that the correlation ceiling of Section \ref{sec:ccc} identifies as the only remaining margin; the rescaling then recovers part of the accuracy lost to averaging. On NoXi+J a gap in $C_b$ remains, almost entirely from the level: the ensemble predicts $0.812$ on average against $0.834$ in the annotations. Two caveats apply: the decision to rescale was made on the validation split, so the final numbers are slightly optimistic; and an ensemble is a statement about the best system we can build, not about the method. We therefore report the single-model mean over seeds as the estimate of the method and the rescaled six-seed ensemble as the system that produces the test predictions.
 
 	\subsection{Summary}
-	\begin{center}
+	\begin{table*}[!tp]
+	\centering
 	\begin{captab}{Summary. Validation CCC (higher is better) of single models (mean over seeds) as each change is added, of the two rescaled six-seed ensembles that produce our test predictions, and, for reference, the test-split CCC of the official baseline and the best entry of the MultiMediate'26 leaderboard.}
 	\begin{tabular}{lcc}
 		\toprule
@@ -811,7 +836,7 @@
 		\bottomrule
 	\end{tabular}
 	\end{captab}
-	\end{center}
+	\end{table*}
 	Our numbers are on the validation split and the leaderboard's on the test split, so the comparison is indicative only. The test predictions of each system (NoXi test-base and test-additional, NoXi+J test) are produced by the corresponding rescaled six-seed ensemble.
 
 
@@ -891,8 +916,9 @@
 		\bibitem{holm1979} Sture Holm, \emph{A Simple Sequentially Rejective Multiple Test Procedure}, Scandinavian Journal of Statistics, 6(2), 65--70 (1979).
 	\end{thebibliography}
 
-	\newpage
-	\begin{appendices}
+	\onecolumn
+	\appendix
+	\titleformat{\section}{\normalfont\Large\bfseries\raggedright}{Appendix \thesection}{1em}{}
 	\section{Details of the State-Space Model}
 	\label{app:ssm}
 		\textbf{No feedthrough term.} The general state-space model has a second term in its output equation, $y(t) = C\xi(t) + D z(t)$. This \emph{feedthrough} is a direct path from the current input to the current output that bypasses the state. The Mamba paper writes the output equation without it, but its reference implementation does add it, as a learned vector with one entry per channel \cite{gu2023mamba}; BiMamba-TTA \cite{ziyu2025} does not write out the SSM at all, so its paper gives no indication either way. Our implementation omits it, i.e.\ $D = 0$. This was not a deliberate design decision but a consequence of implementing the equations as written. A path around the state still exists at block level, because the residual connection of step 4 adds the block input $h_i$ to the block output; what is missing is only the narrower skip from the SSM's own input $z$ to its output. We have not tested whether adding it changes the results.
@@ -900,7 +926,7 @@
 		\textbf{Diagonal state transition.} Following \cite{gu2023mamba}, the state-space model is applied independently to each of the $C'$ channels, and the state matrix of every channel is restricted to be \emph{diagonal}. Channel $d$ thus carries $N$ state coordinates evolving under $A^{(d)} = \mathrm{diag}(a_{d,1},\dots,a_{d,N})$, and because a diagonal matrix is fully determined by its diagonal, no $N \times N$ array is ever materialised: the entire parameter collapses to the $C' \times N$ array $A = (a_{d,n})$, one row of $N$ entries per channel. Each entry governs how quickly one state coordinate forgets, which is why we refer to these entries as decay rates. The update is then elementwise rather than a matrix product, costing $O(N)$ per channel per step instead of $O(N^2)$ and storing $C'N$ parameters instead of $C'N^2$. Diagonality is not merely an efficiency measure: it is what allows the recurrence to be evaluated by a parallel scan, as shown below.
 
 		\textbf{Temporal receptive field.} The decay rate and the timestep jointly determine how current input can influence future output. Consider a single state coordinate, which follows the recurrence $$\xi_t = \bar{A}\,\xi_{t-1} + b_t, \qquad b_t := \bar{B}_t z_t,$$ which is \emph{first-order}: the state at step $t$ is determined solely by the previous state $\xi_{t-1}$ and the current input alone, with no explicit dependence on $\xi_{t-2}$ or earlier. Suppose the input does not exist after step $t_0$ ($z_t = 0 \implies b_t = 0$) for $t > t_0$. Unrolling from $\xi_{t_0}$,
-		$$\xi_{t_0+1} = \bar{A} \, \xi_{t_0}, \qquad \xi_{t_0+2} = \bar{A}^2 \xi_{t_0}, \qquad \dots, \qquad \xi_{t_0+k} = \bar{A}^{\,k}\,\xi_{t_0}.$$
+		$$\begin{gathered}\xi_{t_0+1} = \bar{A} \, \xi_{t_0}, \qquad \xi_{t_0+2} = \bar{A}^2 \xi_{t_0}, \\ \dots, \qquad \xi_{t_0+k} = \bar{A}^{\,k}\,\xi_{t_0}.\end{gathered}$$
 		Since $\bar{A} = \exp(\Delta A) \in (0,1)$, the retained state shrinks geometrically; $\bar{A}$ is called the \emph{decay} (or \emph{retention}) factor. Equivalently, and this is the reading we need, the influence of an input entering at step $t_0$ on the state $k$ steps later carries the weight $\bar{A}^{\,k}$: this is exactly the accumulated multiplier that appears in the associative scan derivation of Appendix \ref{app:scan}. The \emph{memory} of the block is described by how quickly these weights $\bar{A}^{\,1}, \bar{A}^{\,2}, \bar{A}^{\,3}, \dots$ shrink as $k$ grows, and its \emph{effective memory} $\tau_{\text{eff}}$ is the conventional single-number summary - the number of steps after which the weight has fallen to $e^{-1}$ of its initial value. This $e^{-1}$ convention is the standard definition of the time constant of an exponentially decaying response in linear systems theory \cite{oppenheim1997}, and we adopt it unchanged. Solving $$ \bar{A}^{\,\tau_{\text{eff}}} = e^{-1} \implies \tau_{\text{eff}}\,\ln \bar{A} = -1 \implies \tau_{\text{eff}} = \frac{-1}{\ln \bar{A}},$$ and substituting $\ln\bar{A} = \Delta A = -\Delta|A|$ (recall $A<0$ by construction), $$\boxed{\ \tau_{\text{eff}} = \frac{1}{\Delta\,|A|}\ } $$ measured in units of encoder output steps.
 
 		\textbf{Why the initialisation matters.} The naive choice - and the initialisation of our first implementation - is $A_{\log} = \mathbf{0}$ and $s_\Delta = \mathbf{0}$. It gives $|A| = \exp(0) = 1$ and, since the input-dependent projection contributes negligibly at initialisation, $\Delta \approx \text{softplus}(0) = \ln 2 \approx 0.693$. Hence $$\tau_{\text{eff}} = \frac{1}{0.693 \times 1} \approx 1.44 \ \text{steps}$$ The output sequence retains the input rate of $25$ Hz and one step spans $1/25 \ \text{s} = 40 \ \text{ms}$; the receptive field is therefore $$1.44 \times 40\,\text{ms} \approx 58\,\text{ms}$$ A uniform $A_{\log}$ compounds the difficulty: every one of the $N$ state coordinates then carries the same decay rate, so the state dimension supplies $N$ copies of a single timescale rather than a spread of them, entirely defeating the purpose of $N > 1$.
@@ -915,20 +941,20 @@
 	    Evaluated naively the recurrence is a loop: $\xi_t$ cannot be formed until $\xi_{t-1}$ exists, so the $L'$ steps are strictly serial. The math for each step is very simple (just a multiply-add operation on a $C' \times N$ array), so calculating it one step at a time wastes GPU time on just starting the tasks and leaves the hardware mostly idle. For a sequence of $L' = 250$, this means waiting to sequentially launch 250 separate tasks for an amount of work the GPU could otherwise process almost instantly. Ultimately, the step-by-step dependency is what slows the process down, not the calculations themselves.
 	
 	Two structural facts make a parallel evaluation possible. First, because $A$ is \emph{diagonal} in the state dimension, the update does not mix state coordinates: the vector recurrence decomposes into $n_{\text{batch}} \times C' \times N$ mutually independent \emph{scalar} recurrences, one per (sample, channel, state) triple, all sharing the same structure. Second, each such scalar recurrence is an \emph{affine} map of the previous state. Write the step-$t$ update as the function
-	$$f_t : \R \to \R, \qquad f_t(\xi) = a_t\,\xi + b_t, \qquad a_t := \bar{A}_t,\quad b_t := \bar{B}_t z_t,$$
+	$$\begin{gathered}f_t : \R \to \R, \qquad f_t(\xi) = a_t\,\xi + b_t, \\ a_t := \bar{A}_t,\quad b_t := \bar{B}_t z_t,\end{gathered}$$
 	so that unrolling from $\xi_0 = 0$ gives $\xi_t = (f_t \circ f_{t-1} \circ \dots \circ f_1)(0)$. The state at time $t$ is therefore nothing more than the composition of the first $t$ update maps, evaluated at zero - and computing \emph{every} prefix of a sequence under some combining operation is precisely what a \emph{scan} (or prefix computation) does. The archetypal example is the prefix sum, which turns $(x_1, \dots, x_n)$ into $(x_1,\ x_1 + x_2,\ \dots)$; a scan generalises this to any binary operator $\oplus$.
 		
 	The reason this buys anything is that a scan under an \emph{associative} $\oplus$ need not be computed left to right. Associativity means partial results may be regrouped freely, so the sequence can be reduced pairwise in a balanced binary tree: total work stays $O(L')$, but the \emph{sequential depth} - the length of the longest chain of dependent operations - falls from $O(L')$ to $O(\log L')$. For $L' = 250$ that is roughly $8$ dependent stages instead of $250$, each stage saturating the device with independent work.
 		
 	\textit{Closure and the composition rule.} To scan over the update maps we must be able to represent a composed map by a finite parameter set. Affine maps in one variable are closed under composition, and the family is parameterised by exactly two numbers - a multiplier and an offset - which is why the scan carries \emph{pairs} rather than scalars. Explicitly, for $i < j$,
-	$$(f_j \circ f_i)(\xi) = f_j\bigl(f_i(\xi)\bigr) = a_j\bigl(a_i \xi + b_i\bigr) + b_j = \underbrace{(a_j a_i)}_{\text{new multiplier}}\,\xi + \underbrace{(a_j b_i + b_j)}_{\text{new offset}}.$$
+	$$\begin{aligned}(f_j \circ f_i)(\xi) &= f_j\bigl(f_i(\xi)\bigr) = a_j\bigl(a_i \xi + b_i\bigr) + b_j \\ &= \underbrace{(a_j a_i)}_{\text{new multiplier}}\,\xi + \underbrace{(a_j b_i + b_j)}_{\text{new offset}}.\end{aligned}$$
 	The composite is again affine, so identifying each map with its parameter pair $(a,b)$ induces the binary operator
 	$$(a_i, b_i) \oplus (a_j, b_j) := (a_j a_i,\; a_j b_i + b_j), \qquad i < j,$$
 	where the left operand is the earlier segment of the sequence. Intuitively the two components accumulate different things: the multiplier is the running product of decay factors, recording how much of the initial state survives, while the offset is the running total of inputs, each discounted by all the decay factors applied after it entered.
 		
 	\textit{Associativity.} The operator inherits associativity from function composition, but it is worth verifying directly on the parameters. Expanding the two groupings,
-	$$\bigl[(a_i,b_i) \oplus (a_j,b_j)\bigr] \oplus (a_k,b_k) = (a_j a_i,\ a_j b_i + b_j) \oplus (a_k,b_k) = \bigl(a_k a_j a_i,\ a_k a_j b_i + a_k b_j + b_k\bigr),$$
-	$$(a_i,b_i) \oplus \bigl[(a_j,b_j) \oplus (a_k,b_k)\bigr] = (a_i,b_i) \oplus (a_k a_j,\ a_k b_j + b_k) = \bigl(a_k a_j a_i,\ a_k a_j b_i + a_k b_j + b_k\bigr),$$
+	$$\begin{aligned}&\bigl[(a_i,b_i) \oplus (a_j,b_j)\bigr] \oplus (a_k,b_k) \\ &\quad= (a_j a_i,\ a_j b_i + b_j) \oplus (a_k,b_k) \\ &\quad= \bigl(a_k a_j a_i,\ a_k a_j b_i + a_k b_j + b_k\bigr),\end{aligned}$$
+	$$\begin{aligned}&(a_i,b_i) \oplus \bigl[(a_j,b_j) \oplus (a_k,b_k)\bigr] \\ &\quad= (a_i,b_i) \oplus (a_k a_j,\ a_k b_j + b_k) \\ &\quad= \bigl(a_k a_j a_i,\ a_k a_j b_i + a_k b_j + b_k\bigr),\end{aligned}$$
 	which agree componentwise. Together with the identity element $(1, 0)$ - the identity map $\xi \mapsto \xi$ - the parameter pairs form a monoid under $\oplus$, which is exactly the algebraic structure a scan requires. Note that $\oplus$ is \emph{not} commutative: $(a_j a_i, a_j b_i + b_j) \neq (a_i a_j, a_i b_j + b_i)$ in general, reflecting the obvious fact that reordering the timesteps changes the trajectory. This costs us nothing, since a scan requires associativity but never commutativity.
 		
 	Running the scan over $\bigl((a_1,b_1),\dots,(a_{L'},b_{L'})\bigr)$ yields at position $t$ the pair representing $f_t \circ \dots \circ f_1$; because $\xi_0 = 0$ the multiplier component annihilates and the state is read off directly from the offset component, $\xi_t = a_{t}\cdots a_1 \cdot 0 + (\text{offset}) = (\text{offset})$.
@@ -976,7 +1002,7 @@
 	
 	The differential entropy of the Beta distribution has the closed-form expression
 	$$
-	H(p) = \ln B(\hat{\alpha},\hat{\beta}) - (\hat{\alpha}-1)\psi(\hat{\alpha}) - (\hat{\beta}-1)\psi(\hat{\beta}) + (\hat{\alpha}+\hat{\beta}-2)\psi(\hat{\alpha}+\hat{\beta}),
+	\begin{aligned}H(p) &= \ln B(\hat{\alpha},\hat{\beta}) - (\hat{\alpha}-1)\psi(\hat{\alpha}) - (\hat{\beta}-1)\psi(\hat{\beta}) \\ &\quad + (\hat{\alpha}+\hat{\beta}-2)\psi(\hat{\alpha}+\hat{\beta}),\end{aligned}
 	$$
 	where $B(\cdot,\cdot)$ is the Beta function and $\psi(\cdot)$ is the digamma function.  
 	Substituting the same re-parameterisation $\hat{\alpha}=\mu\kappa$, $\hat{\beta}=(1-\mu)\kappa$ and taking the derivative with respect to $\kappa$ likewise yields
@@ -992,7 +1018,7 @@
 	It is boundary-aware: $\lim_{\mu\to 0^+}U=0$ and $\lim_{\mu\to 1^-}U=0$, which matches the intuition that a prediction that is certain to be near the extremes of engagement (fully disengaged or fully engaged) should carry low uncertainty.  
 	Finally, variance is already required for the Beta negative log-likelihood (Beta NLL) loss used during training:
 	$$
-	\mathcal{L}_{\text{NLL}}(x, y) = -[(\hat{\alpha}-1)\ln y + (\hat{\beta}-1)\ln(1-y) - \ln B(\hat{\alpha},\hat{\beta})].
+	\begin{aligned}\mathcal{L}_{\text{NLL}}(x, y) = -[&(\hat{\alpha}-1)\ln y + (\hat{\beta}-1)\ln(1-y) \\ &- \ln B(\hat{\alpha},\hat{\beta})].\end{aligned}
 	$$
 	Because the variance appears directly in the predictive distribution (and therefore in every forward pass), it incurs no extra computation at inference time.  
 	All these properties make variance the natural, cheap uncertainty proxy for regression.
@@ -1017,7 +1043,7 @@
 	Logit-normal regression maps the bounded domain $y \in [0,1]$ to an unbounded latent domain $z \in \R$ using the logit transformation, assuming the latent variable follows a Gaussian distribution:
 	$$z = \text{logit}(y) = \ln\left(\frac{y}{1-y}\right) \sim \mathcal{N}(\mu, \sigma^2)$$
 	While the latent Gaussian log-likelihood is highly stable to optimize during training, the moments of the resulting logit-normal variable do not exist in closed form. The true predictive mean and variance must be resolved via numerical integration:
-	$$\mathbb{E}[Y] = \int_{0}^{1} \frac{1}{y(1-y)\sigma\sqrt{2\pi}} \exp\left( -\frac{(\text{logit}(y) - \mu)^2}{2\sigma^2} \right) \cdot y \, dy$$
+	$$\begin{aligned}\mathbb{E}[Y] = \int_{0}^{1} &\frac{1}{y(1-y)\sigma\sqrt{2\pi}} \\ &\exp\left( -\frac{(\text{logit}(y) - \mu)^2}{2\sigma^2} \right) \cdot y \, dy\end{aligned}$$
 	Performing numerical integration over $N$ categories across multiple unimodal branches for every incoming frame introduces an insurmountable latency bottleneck during real-time test-time adaptation. 
 	
 	Crucially, EngageNet utilizes an inter-modal information sharing loss ($\mathcal{L}_{mis}$) that minimizes the Kullback-Leibler (KL) divergence between the unimodal predictions and the fused network prediction. While computing the KL divergence between two latent Gaussians in logit space is trivial, minimizing it optimizes a distorted geometry that stretches gradients to infinity near the boundaries ($0$ and $1$). Computing the exact KL divergence between two true logit-normal densities within the probability domain $[0,1]$ lacks an analytical closed-form expression \cite{aitchison1980}. Because the Beta distribution possesses a known analytical KL divergence \ref{eq:beta_kl}, it provides a stable, exact, and geometry-preserving target for cross-modal alignment.
@@ -1260,5 +1286,4 @@
 
 	Dropout itself brings no detectable gain: on NoXi all three seeds are slightly higher (Welch $p = 0.23$), on NoXi+J all three are lower ($p = 0.11$; paired over seeds $p = 0.04$). Averaging the passes leaves the prediction practically unchanged: the pooled CCC moves by less than $0.001$, and the changes over people are not different from zero (Wilcoxon $p = 0.14$ on NoXi and $0.43$ on NoXi+J). As dropout acts only in the heads, all passes share the same representation up to the heads, which likely keeps them close together. With $U_{\text{total}}$, the filter selects $4.7\%$ of the windows on NoXi and $2.4\%$ on NoXi+J, no more than with the parametric variance, and the adaptation again stays within noise (Wilcoxon $p = 0.26$ and $0.59$; no person changes by more than $0.021$). Method 3 therefore does not change the result: the filter now sees the full predictive variance, but the target of the loss is still the model's own prediction, the limitation named above. Test-time adaptation remains a negative result, and dropout is not used in the final systems.
 	
-	\end{appendices}
 \end{document}
