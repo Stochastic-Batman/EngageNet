@@ -7,15 +7,17 @@
 \usepackage{xcolor}
 \usepackage{booktabs}
 \usepackage{longtable}
+\usepackage{caption}
+\captionsetup[table]{font=small,labelfont=bf,skip=6pt}
 
 \newcommand{\R}{\mathbb{R}}
 
 \begin{document}
 	
 	\title{\textbf{EngageNet: Multi-Modal Engagement Regression with Ordered State-Space Fusion}}
-	\author{Lado Turmanidze\\ \small Georgian Artificial Intelligence Association (GAIA), Tbilisi, Georgia\\ \small \texttt{StochasticBatman@proton.me}
-	\and Philipp M\"uller\\ \small Max Planck Institute for Intelligent Systems, Stuttgart, Germany\\ \small \texttt{phmueller@is.mpg.de}
-	\and Beso Mikaberidze\\ \small Muskhelishvili Institute of Computational Mathematics (MICM),\\ \small Georgian Technical University, Tbilisi, Georgia\\ \small \texttt{beso.mikaberidze@gmail.com}}
+	\author{Lado Turmanidze\\ \footnotesize Georgian Artificial Intelligence\\ \footnotesize Association (GAIA)\\ \footnotesize Tbilisi, Georgia\\ \footnotesize \texttt{StochasticBatman@proton.me}
+	\and Philipp M\"uller\\ \footnotesize Max Planck Institute for\\ \footnotesize Intelligent Systems\\ \footnotesize Stuttgart, Germany\\ \footnotesize \texttt{phmueller@is.mpg.de}
+	\and Beso Mikaberidze\\ \footnotesize Muskhelishvili Institute of\\ \footnotesize Computational Mathematics (MICM)\\ \footnotesize Georgian Technical University\\ \footnotesize Tbilisi, Georgia\\ \footnotesize \texttt{beso.mikaberidze@gmail.com}}
 	\date{\today}
 	\maketitle
 	
@@ -196,7 +198,7 @@
 	    \item \textbf{Efficiency gains:} The feature width shrinks to $C'$, which drops the parameter cost from a heavy $\Theta(M^2C'^2)$ down to just $\Theta(C'^2)$. Additionally, the depth of the dependent math operations (the associative scan) drops from $\lceil\log_2 L'\rceil$ to just $\lceil\log_2 M\rceil$, running on a much smaller state.
 	\end{itemize}
 
-	Before the heads, every slot is returned to the stream it came from. Slot $i$ of the scan holds $\sum_j P_{ij} u_j$, so stream $j$ receives back $\hat{H}^{(t)}_j = \sum_{i=1}^{M} P_{ij} H^{(t)}_i$, i.e.\ the output is multiplied by $P^\top$, which for a permutation is its inverse. Without this step the layout of the heads' input would change from window to window: under an input-dependent $P$, the part of $H$ that the read-out weights associate with slot $3$ would hold, say, the expert's face in one window and the novice's text in the next. With it, part $j$ of $H$ always belongs to stream $j$, and the order influences only the scan, where it is meant to. Finally, the output is stitched back together side-by-side to match the expected format for the final prediction heads: $$H^{(t)} = \hat{H}_1^{(t)} \circ \dots \circ \hat{H}_M^{(t)} \in \R^{MC'}$$ which returns the data to its original shape of $H \in \R^{L' \times MC'}$.
+	In the corrected layer (Section \ref{sec:fixedorder}), every slot is returned before the heads to the stream it came from. Slot $i$ of the scan holds $\sum_j P_{ij} u_j$, so stream $j$ receives back $\hat{H}^{(t)}_j = \sum_{i=1}^{M} P_{ij} H^{(t)}_i$, i.e.\ the output is multiplied by $P^\top$, which for a permutation is its inverse. Without this step the layout of the heads' input would change from window to window: under an input-dependent $P$, the part of $H$ that the read-out weights associate with slot $3$ would hold, say, the expert's face in one window and the novice's text in the next. With it, part $j$ of $H$ always belongs to stream $j$, and the order influences only the scan, where it is meant to. Finally, the output is stitched back together side-by-side to match the expected format for the final prediction heads: $$H^{(t)} = \hat{H}_1^{(t)} \circ \dots \circ \hat{H}_M^{(t)} \in \R^{MC'}$$ which returns the data to its original shape of $H \in \R^{L' \times MC'}$.
 	
 	\subsection{Differential Entropy and the Failure of Gaussian Assumptions}
 	To adapt the entropy-based selection mechanism of BiMamba-TTA for continuous engagement regression, we transition from Shannon entropy to \textbf{differential entropy}. For a continuous random variable $y$ with probability density $p(y)$, the differential entropy is defined as:
@@ -297,7 +299,7 @@
 	\subsection{Uncertainty Estimation Methods}
 	\label{sec:uncertainty}
 	
-	Uncertainty is formally quantified as the variance of the predictive distribution. Two kinds are usually distinguished. \emph{Aleatoric} uncertainty is noise in the data itself: annotators disagree, behaviour is ambiguous, a face is partly out of frame. More training data would not remove it. \emph{Epistemic} uncertainty is the model's own lack of knowledge: it is large on inputs unlike those seen in training - for example, recordings from a different corpus or culture - and shrinks as the model sees more data. We describe three methods. They do \emph{not} each capture both kinds: the first measures only aleatoric uncertainty, the second only epistemic uncertainty, and the third is their sum, so both are covered only by the third method, or by the first two together. All three are expressed in terms of the Beta predictive distribution $p(y \mid x) = \mathrm{Beta}(\hat{\alpha}(x),\hat{\beta}(x))$. \textcolor{red}{Of these, only the first is realised in the current implementation; methods 2 and 3 require stochastic regularisation that the present architecture does not contain (see the remark at the end of this subsection).}
+	Uncertainty is formally quantified as the variance of the predictive distribution. Two kinds are usually distinguished. \emph{Aleatoric} uncertainty is noise in the data itself: annotators disagree, behaviour is ambiguous, a face is partly out of frame. More training data would not remove it. \emph{Epistemic} uncertainty is the model's own lack of knowledge: it is large on inputs unlike those seen in training - for example, recordings from a different corpus or culture - and shrinks as the model sees more data. We describe three methods. They do \emph{not} each capture both kinds: the first measures only aleatoric uncertainty, the second only epistemic uncertainty, and the third is their sum, so both are covered only by the third method, or by the first two together. All three are expressed in terms of the Beta predictive distribution $p(y \mid x) = \mathrm{Beta}(\hat{\alpha}(x),\hat{\beta}(x))$. The filter of the adaptation uses method 1 by default, in every run without dropout, and method 3 when the model is trained with dropout and run with MC dropout (end of this subsection; results in Section \ref{sec:ttaresults}). Method 2 is not used on its own. The systems that produce our test predictions use no adaptation and therefore none of the three.
 	
 	\begin{enumerate}
 		\item \textbf{Parametric Beta (Aleatoric Uncertainty):}  
@@ -457,7 +459,7 @@
 	$$k_j = W_K\,\bar{u}_j \in \R^{d_s}, \qquad p_i \in \R^{d_s},$$
 	where $W_K \in \R^{d_s \times C'}$ is shared across modalities and $p_1, \dots, p_M$ are free parameters. The score is the scaled dot product
 	$$Z_{ij} = \frac{p_i^\top k_j}{\sqrt{d_s}} .$$
-	Row $i$ of $Z$ therefore asks how well each stream fits position $i$, and column $j$ how well stream $j$ fits each position: rows and columns index different kinds of objects. Our first formulation used a query computed from the data, $q_i = W_Q\,\bar{u}_i$, so that $Z_{ij} = q_i^\top k_j$ compared stream $i$ with stream $j$ and contained no notion of position at all; it also made the result depend on how the streams are numbered (see below). The division by $\sqrt{d_s}$ keeps the scores at a magnitude independent of $d_s$, as in scaled dot-product attention. It matters here because $Z$ is next divided by the annealing temperature $\tau$: an unscaled score of large magnitude has the same effect as a small $\tau$ and drives the Sinkhorn output towards a hard assignment before the annealing schedule intends it to. Both changes are evaluated in Section \ref{sec:fixedorder}.
+	Row $i$ of $Z$ therefore asks how well each stream fits position $i$, and column $j$ how well stream $j$ fits each position: rows and columns index different kinds of objects. Our first formulation used a query computed from the data, $q_i = W_Q\,\bar{u}_i$, so that $Z_{ij} = q_i^\top k_j$ compared stream $i$ with stream $j$ and contained no notion of position at all; it also made the result depend on how the streams are numbered (see below). The division by $\sqrt{d_s}$ keeps the scores at a magnitude independent of $d_s$, as in scaled dot-product attention. It matters here because $Z$ is next divided by the annealing temperature $\tau$: an unscaled score of large magnitude has the same effect as a small $\tau$ and drives the Sinkhorn output towards a hard assignment before the annealing schedule intends it to. Both changes are evaluated in Section \ref{sec:fixedorder}. This subsection describes the corrected layer of that section; all other reported models, including those behind our test predictions, use the first formulation, with data-dependent queries, unscaled scores, $10$ Sinkhorn iterations and no unsorting (Section \ref{sec:intermodal}).
 	
 	\subsubsection*{Gumbel perturbation}
 	The Gumbel distribution is classically used in extreme value theory \cite{gumbel1954} to model the asymptotic distribution of the maximum of a sequence of independent and identically distributed random variables. Its probability density function for location $\mu$ and scale $\beta$ is given by: 
@@ -496,7 +498,7 @@
 	
 	This is algebraically identical to Sinkhorn-Knopp on $\exp(\tilde{Z})$ - each step divides by a row or column sum, which by the identity above is a subtraction of its logarithm - but the largest intermediate quantity is $\max_j \tilde{Z}_{ij}$ rather than $\exp(\max_j \tilde{Z}_{ij})$. The exponential map is applied once, at the end, to values that are by construction non-positive log-probabilities, so the returned entries lie in $(0,1]$ and the gradient operator $\partial P / \partial Z$ remains well-conditioned throughout optimisation.
 
-	The number of iterations matters. Sinkhorn-Knopp reaches a doubly-stochastic matrix only in the limit; after finitely many iterations the result satisfies exactly only the constraint of its last pass, here the columns. With $n_{\text{iter}} = 10$ and unscaled scores, the rows of the learned $P$ summed to between $0.6$ and $2.0$ (Section \ref{sec:fixedorder}), so some positions received about two streams and others about half of one. We therefore use $n_{\text{iter}} = 50$ and check the row and column sums of the learned $P$ on the validation windows.
+	The number of iterations matters. Sinkhorn-Knopp reaches a doubly-stochastic matrix only in the limit; after finitely many iterations the result satisfies exactly only the constraint of its last pass, here the columns. With $n_{\text{iter}} = 10$ and unscaled scores, the rows of the learned $P$ summed to between $0.6$ and $2.0$ (Section \ref{sec:fixedorder}), so some positions received about two streams and others about half of one. The corrected layer therefore uses $n_{\text{iter}} = 50$ and check the row and column sums of the learned $P$ on the validation windows.
 
 	\subsubsection*{Soft reordering}
 	With $P$ computed as above, the permuted representation for position $i$ is the $P$-weighted convex combination of all intra-modal outputs. Concretely, the $i$-th row of $P$, denoted $P_{i\cdot} = (P_{i1}, \dots, P_{iM})$, defines a probability distribution over the $M$ modalities; since $P$ is doubly-stochastic, we have $P_{ij} \geq 0$ and $\sum_j P_{ij} = 1$ for every $i$. The soft assignment is then:
@@ -580,7 +582,8 @@
 	\subsection{Seed Variability}
 	Training is stochastic: the initial weights, the order of training sessions and the Gumbel noise all depend on a random seed. Every configuration below was trained with at least three seeds ($95$, $1$, $2$; the two configurations that decide the final input set also $3$, $4$, $5$), and we report the mean and the sample standard deviation. The experiment of this subsection was made with the original single-session batches of Section \ref{sec:batches}.
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Seed variability and window length. Validation CCC (session level, as in the official scoring; higher is better) of three training seeds and their mean $\pm$ sample standard deviation, for $10$ s and $20$ s windows. Single-session batches, core features.}
 	\begin{tabular}{llccc c}
 		\toprule
 		\textbf{Corpus} & \textbf{Window} & \textbf{Seed 95} & \textbf{Seed 1} & \textbf{Seed 2} & \textbf{Mean $\pm$ sd} \\
@@ -591,7 +594,7 @@
 		NoXi+J & $10$ s & $\mathbf{0.5298}$ & $0.5481$ & $0.5082$ & $0.529 \pm 0.020$ \\
 		NoXi+J & $20$ s & $0.5005$ & $\mathbf{0.6044}$ & $\mathbf{0.5759}$ & $\mathbf{0.560 \pm 0.054}$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 
 	Bold marks the better window length within each corpus and column. The seed-to-seed standard deviation lies between $0.01$ and $0.05$, so single-run differences of that size carry no information. The $20$ s windows ($L = 500$, window hop $250$) were tested because after the S4D-Real initialisation the SSM can retain information for up to $\sim\!10^3$ steps, while a $10$ s window resets the state every $250$ steps. On NoXi the longer window changes nothing; on NoXi+J it raises the mean by $0.03$, but with a standard deviation of $0.054$ the difference is not established.
@@ -602,7 +605,8 @@
 
 	We therefore load the active streams of all training sessions into memory once and draw every batch from a random permutation of all windows of all sessions, re-shuffled each epoch; a batch now almost always mixes several sessions. The full objective was retrained under both schemes, three seeds each. In the table, $\Delta$ is the mixed-session mean minus the single-session mean, and the number in parentheses is the $p$-value of a two-sided Welch $t$-test \cite{welch1947} comparing the two groups of three seed scores. Welch's test asks whether two means differ by more than the spread within each group would explain, without assuming that both groups vary equally; $p$ is the probability of seeing a difference at least this large if the batch scheme in fact made no difference, and we call a difference significant when $p < 0.05$. For $|\text{CDD}_G|$ lower is better; bold marks the better scheme in each column.
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Batch composition. Validation CCC (mean $\pm$ sd over three seeds; higher is better) and mean absolute gender disparity $|\text{CDD}_G|$ (lower is better) for batches drawn from one session and batches mixed across sessions. $\Delta$: mixed minus single-session mean, Welch $p$-value in parentheses.}
 	\begin{tabular}{lcccc}
 		\toprule
 		& \multicolumn{2}{c}{\textbf{NoXi}} & \multicolumn{2}{c}{\textbf{NoXi+J}} \\
@@ -612,7 +616,7 @@
 		Mixed sessions & $\mathbf{0.724 \pm 0.008}$ & $\mathbf{0.0064}$ & $\mathbf{0.599 \pm 0.029}$ & $\mathbf{0.0121}$ \\
 		$\Delta$ ($p$, Welch) & $+0.015$ $(0.10)$ & & $+0.070$ $(0.03)$ & \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 
 	Mixing sessions improves NoXi+J significantly and NoXi in the same direction. The gender disparity on NoXi+J halves (per seed $0.009$, $0.016$, $0.012$, against $0.000$, $0.039$, $0.036$ before), but with three seeds the difference is not significant ($p = 0.41$). One NoXi+J seed was by mistake trained twice concurrently into the same directory; the two copies scored $0.585$ and $0.624$, of which the table uses the later one, and the improvement remains significant with either. All results from here on use mixed batches unless stated otherwise.
@@ -622,7 +626,8 @@
 
 	We ran the whole ablation twice, once under each batch scheme of Section \ref{sec:batches}, since the scheme turned out to matter. Each entry is the difference between the variant's three-seed mean and that of the full objective under the same scheme, with the Welch $p$-value of Section \ref{sec:batches} in parentheses. A negative difference means that the score dropped when the component was removed, i.e.\ that the component was helping. Bold marks the largest drop in each column, and $^{*}$ marks $p < 0.05$.
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Ablation of the training objective. First row: validation CCC of the full objective (mean $\pm$ sd over three seeds; higher is better). Other rows: change of the mean CCC when one component is switched off (negative means the component helped), Welch $p$-value in parentheses, under both batch schemes. $10$ s windows, core features.}
 	\small
 	\begin{tabular}{lcccc}
 		\toprule
@@ -636,7 +641,7 @@
 		No reweighting ($\beta_w = 0$) & $\mathbf{-0.037}$ $(0.22)$ & $-0.034$ $(0.13)$ & $+0.002$ $(0.87)$ & $+0.004$ $(0.85)$ \\
 		No fairness ($\lambda_f = 0$) & $+0.001$ $(0.91)$ & $-0.019$ $(0.69)$ & $\mathbf{-0.028}$ $(0.06)$ & $\mathbf{-0.026}$ $(0.26)$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 
 	\textbf{Ordering term.} With single-session batches, removing $\lambda_c(1 - \widehat{\text{CCC}})$ causes the largest loss and the only individually significant one: on NoXi+J the mean falls from $0.529$ to $0.396$. With mixed batches its removal has no measurable effect. A plausible explanation, which we have not tested directly, is that a single-session batch shows the likelihood only one conversation at a time, so it cannot learn that one session is on the whole more engaged than another, and the ordering term compensates for this; once a batch mixes sessions, the likelihood sees those differences itself. Whatever the mechanism, the result shows that the value of a loss term cannot be judged independently of how the batches it is computed on are composed.
@@ -645,7 +650,8 @@
 
 	\textbf{Fairness term.} With single-session batches, removing it changes nothing measurable. With mixed batches, removing it lowers the mean by about $0.027$ on both corpora ($p = 0.06$ and $0.26$); in other words, keeping the term slightly \emph{raised} accuracy, although it was added for fairness and not for accuracy. A possible explanation is that it acts as a regulariser - an extra constraint that keeps the model from fitting peculiarities of the training data too closely and so helps it generalise - but we have not tested this, and the effect is not significant. Its effect on the quantity it was designed for is not measurable in either scheme (lower is better; bold marks the lowest value in each column):
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Effect of the fairness term on fairness. Mean absolute gender disparity $|\text{CDD}_G|$ over three seeds (lower is better) with and without the fairness penalty, under both batch schemes; $p$ from Welch's test against $\lambda_f = 0.05$.}
 	\small
 	\begin{tabular}{llcc}
 		\toprule
@@ -656,7 +662,7 @@
 		Mixed & $\lambda_f = 0.05$ & $\mathbf{0.0064}$ & $\mathbf{0.0121}$ \\
 		Mixed & $\lambda_f = 0$ & $0.0074$ $(p = 0.89)$ & $0.0163$ $(p = 0.53)$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 
 	\textbf{What the ablation can and cannot show.} With three seeds per group and a seed standard deviation of $0.01$ to $0.03$, only differences of roughly $0.04$ or more are detectable. Moreover, when eight comparisons are made at once, the chance that at least one of them reaches $p < 0.05$ by luck alone is far larger than $5\%$. The Holm correction \cite{holm1979} compensates for this: the $p$-values are sorted, the smallest is multiplied by the number of comparisons ($8$), the next by $7$, and so on, and a result counts as significant only if its corrected value stays below $0.05$. In the mixed-batch ablation the smallest $p$-value, $0.055$ (shown as $0.06$ in the table), becomes $0.44$, so none of the eight differences is significant. We therefore keep the full objective: no term is shown to hurt, and dropping one on the basis of these differences would itself be a decision made on noise.
@@ -665,7 +671,8 @@
 	\label{sec:features}
 	The model so far reads the four core streams (eGeMAPS, W2v-BERT, OpenFace2, OpenPose). All ten feature types of the challenge release are available for every split of both corpora, test included. We added them in groups to the core set: text (the XLM-RoBERTa embedding of the transcript), image embeddings (DINO, ImageBind, Swin), video embeddings (VideoMAE, CLIP), and all ten together. The core set and core plus text were trained with six seeds, the others with three; $\Delta$ and $p$ (Welch, as in Section \ref{sec:batches}) are relative to the core set. Bold marks the best value in each column.
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Input feature sets. Validation CCC (mean $\pm$ sd over seeds; higher is better) when feature groups are added to the four core streams; $\Delta$ and Welch $p$ relative to the core set. Six seeds for the core set and core plus text, three for the others.}
 	\small
 	\begin{tabular}{lcccccc}
 		\toprule
@@ -678,7 +685,7 @@
 		+ video & $0.712 \pm 0.027$ & $-0.014$ & $0.47$ & $0.509 \pm 0.033$ & $-0.084$ & $0.03$ \\
 		All ten & $0.714 \pm 0.017$ & $-0.012$ & $0.34$ & $0.641 \pm 0.038$ & $+0.048$ & $0.15$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 	{\footnotesize $^{*}$ All ten streams score marginally higher on NoXi+J ($0.6412$ against $0.6406$), far below the seed-to-seed spread, while taking about $2.5$ times longer to train, varying twice as much across seeds and scoring lower on NoXi; we therefore count core plus text as the best input set.}
 
@@ -690,7 +697,8 @@
 	\label{sec:dynamics}
 	The pooled CCC rewards two things: placing each person's overall level of engagement correctly relative to the other people, and following the changes within each person's session. To see which of the two limits the final models, we split the prediction for each person (one role in one session, $20$ people per corpus) into its mean and the deviations from that mean, and replace one part at a time by the truth. \emph{True level} keeps our deviations but shifts each person's prediction to the true mean; \emph{true dynamics} keeps our mean but uses the true deviations; \emph{level only} predicts each person's true mean as a constant.
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Level versus within-person dynamics, final models (mean over six seeds). Validation CCC (higher is better) of the prediction as it is and with one part replaced by the truth: each person's mean (true level), the deviations from it (true dynamics), or the true mean alone. Also the share of the label variance between people, and the Pearson correlation of the person means and within persons.}
 	\small
 	\begin{tabular}{lcc}
 		\toprule
@@ -704,7 +712,7 @@
 		Pearson $r$ of the person means & $0.90$ & $0.89$ \\
 		Mean within-person Pearson $r$ & $0.47$ & $0.60$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 
 	The level is largely right: the predicted person means correlate at $0.90$ with the true ones, and a perfect level would add only $0.04$ to $0.05$. With perfect dynamics the CCC would reach $0.95$. Within a person, however, the prediction correlates with the annotation at only $0.47$ on NoXi and $0.60$ on NoXi+J. The remaining error therefore lies in following engagement within a session, not in its overall level.
@@ -713,7 +721,8 @@
 
 	To see which timescales are missed, we split each person's deviation from their mean with centred moving averages of $2$, $10$ and $60$ s into four bands, fast ($< 2$ s), mid ($2$ to $10$ s), slow ($10$ to $60$ s) and very slow ($> 60$ s), which add up to the deviation exactly. For each band we report its share of the within-person label variance, the mean within-person correlation between the prediction's and the label's band, and the pooled CCC if that band of the prediction were replaced by the truth (final models, mean over six seeds; CCC $0.731$ on NoXi and $0.641$ on NoXi+J):
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Error by timescale, final models. Each person's deviation from their mean is split into four bands: share of the within-person label variance in each band, Pearson $r$ between predicted and true band (higher is better), and the validation CCC if that band alone were predicted perfectly.}
 	\small
 	\begin{tabular}{lcccccc}
 		\toprule
@@ -725,7 +734,7 @@
 		Slow, $10$ to $60$ s & $32.0\%$ & $0.58$ & $0.813$ & $32.1\%$ & $0.55$ & $\mathbf{0.794}$ \\
 		Very slow, $> 60$ s & $40.6\%$ & $0.45$ & $\mathbf{0.844}$ & $48.5\%$ & $0.78$ & $0.764$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 	{\footnotesize The variance shares do not add up to $100\%$ because the moving-average bands are not exactly uncorrelated. The gains of different bands overlap and do not add up either.}
 
@@ -737,7 +746,8 @@
 	$$z = \text{BiMamba}(H W_z) \in \R^{L' \times C'}, \qquad W_z \in \R^{MC' \times C'},$$
 	with the structure and initialisation of the intra-modal block (convolution width $4$), and let both multimodal heads read the concatenation $[H, z]$, so that the frame-wise path is unchanged. This adds $0.26$M parameters ($2.06$M to $2.33$M). Six seeds each, compared with the final models of Section \ref{sec:features}:
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Temporal block after fusion. Validation CCC (mean $\pm$ sd over six seeds; higher is better) without and with the temporal BiMamba after fusion, their difference with the Welch $p$-value, and for the frame-wise mean of the six models (not rescaled) the CCC and the within-person Pearson $r$.}
 	\small
 	\begin{tabular}{lcc}
 		\toprule
@@ -752,7 +762,7 @@
 		Within-person $r$ of the mean: final & $0.512$ & $0.687$ \\
 		Within-person $r$ of the mean: + temporal block & $0.529$ & $\mathbf{0.746}$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 
 	On NoXi+J the temporal block raises the CCC by $0.043$; the difference stays significant after the Holm correction over the two corpora ($p = 0.012$), and each of the six seeds scores higher than the final model with the same seed. The gain comes from where the previous subsection located the error: the within-person correlation rises from $0.69$ to $0.75$. The mean of the six models reaches $0.729$ without rescaling, above the earlier rescaled ensemble ($0.714$). On NoXi the block has no effect. This fits the variance split above: on NoXi+J three quarters of the label variance lie within a person, on NoXi only half. Both runs use the first implementation of the ordering layer (Section \ref{sec:fixedorder}). The ensembles and the new test predictions use the longer windows of Section \ref{sec:longwindows} instead.
@@ -761,7 +771,8 @@
 	\label{sec:longwindows}
 	Section \ref{sec:dynamics} found most of the within-person variance, and most of the missing score, in changes slower than the $10$ s window. We therefore lengthen the window. A $60$ s window has $1500$ frames and the stride is $750$; one extra window ending at the last frame covers the end of the session, which the regular stride would leave to the last predicted value. Memory grows with the number of frames per batch, so the batch shrinks from $8$ to $4$ windows ($2$ for $120$ s), and since an epoch then has fewer updates, training runs for up to $100$ epochs. All runs keep the temporal block after fusion (Section \ref{sec:fusiontemporal}). A control with $10$ s windows and batches of $4$ separates the effect of the window from that of the smaller batch.
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Window length and batch size. Validation CCC (mean $\pm$ sd over the given number of seeds; higher is better) for windows of $10$ to $120$ s and batches of $2$ to $8$ windows, all with the temporal block after fusion. Empty cells were not run.}
 	\small
 	\begin{tabular}{lcccc}
 		\toprule
@@ -775,14 +786,15 @@
 		$60$ s, $4$, gradient norm clipped at $1$ & $3$ & $0.697 \pm 0.065$ & & \\
 		$120$ s, $2$ & & & $3$ & $0.735 \pm 0.025$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 
 	On NoXi+J the $60$ s window raises the CCC by $0.044$ over $10$ s windows ($p = 0.005$, Welch; $p = 0.0003$ paired by seed), and each of the six seeds scores higher. The smaller batch explains little of it: on the same three seeds the control with batches of $4$ stays $0.036$ below the $60$ s windows (paired $p = 0.012$). Doubling the window to $120$ s gives the same score ($-0.001$ on the same seeds).
 
 	To see where the gain comes from, we repeat the analysis of Section \ref{sec:dynamics} for the six single models with $10$ and with $60$ s windows on NoXi+J:
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Where the $60$ s windows gain on NoXi+J (mean over six single models). CCC with each person's true level, Pearson $r$ of the predicted and true person means, mean within-person $r$, and $r$ in each band of Section \ref{sec:dynamics}; higher is better throughout.}
 	\small
 	\begin{tabular}{lcc}
 		\toprule
@@ -796,7 +808,7 @@
 		Band $r$: slow, $10$ to $60$ s & $0.64$ & $0.66$ \\
 		Band $r$: very slow, $> 60$ s & $0.80$ & $\mathbf{0.84}$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 
 	Both parts improve: each person's level is placed better, and within a person the prediction follows the label more closely. Within a person the gain lies mainly in the very slow band, while the slow band from $10$ to $60$ s, which Section \ref{sec:dynamics} singled out, barely changes. A $60$ s window cannot resolve changes slower than itself either. Presumably it gives each window more evidence for the person's current level, and the overlapping windows, half a minute apart, then follow that level as it drifts over the session.
@@ -815,7 +827,8 @@
 	\label{sec:fixedorder}
 	The ordering layer of Section \ref{sec:gumbel} is a contribution only if it does better than a fixed order. We trained the final configuration (core features plus text, mixed batches, full objective) with the meta-network removed and $P$ replaced by a constant permutation matrix, for four fixed orders of the $M = 10$ streams, with three seeds each ($95$, $1$, $2$), and compared each with the six seeds of the learned ordering by Welch's $t$-test, as in Section \ref{sec:features}. The four orders are: (i) role-blocked, the five streams of the expert followed by the five of the novice, feature types in alphabetical order (the order in which the code stacks the streams before $P$ is applied); (ii) role-interleaved, the expert and novice streams of each feature type next to each other; (iii) and (iv) two random orders, drawn once and kept fixed for all seeds. An order and its reverse are not both included: the forward and backward scans of the bidirectional block have the same structure and separately initialised parameters, so reversing the sequence only exchanges their roles.
 	
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Learned versus fixed ordering. Validation CCC (mean $\pm$ sd; higher is better) of the learned ordering (six seeds) and of four fixed orders (three seeds each). $\Delta$: fixed minus learned; $p$ from Welch's test.}
 	\small
 	\begin{tabular}{lcccccc}
 		\toprule
@@ -830,7 +843,7 @@
 		\midrule
 		All fixed (12 runs) & $0.712 \pm 0.014$ & $-0.019$ & $0.07$ & $0.666 \pm 0.018$ & $+0.025$ & $0.02^{*}$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 	{\footnotesize $\Delta$ and $p$ (Welch) are relative to the learned ordering. Bold marks the best mean in each column; $^{*}$ marks $p < 0.05$ before correction.}
 	
@@ -845,13 +858,14 @@
 		\item \textbf{Sinkhorn had not converged.} With $10$ iterations and unscaled scores, $P$ was column-stochastic but not doubly stochastic. Corrected by the $1/\sqrt{d_s}$ scaling and $50$ iterations.
 		\item \textbf{The score matrix had no notion of position.} With data-dependent queries, $Z_{ij}$ compared stream $i$ with stream $j$ rather than scoring stream $j$ for position $i$, and the result depended on how the streams were numbered. Corrected by one learned query per position.
 	\end{enumerate}
-	All other results in this document were obtained with the first implementation.
+	All other results in this document were obtained with the first implementation, except that the models trained after this correction (Sections \ref{sec:fusiontemporal}, \ref{sec:longwindows} and \ref{sec:ttaresults}) are run at the temperature of their selected epoch.
 
 	\textbf{Effect of the inference temperature alone.} Re-scoring the six existing learned models per corpus at the temperature of their selected epoch ($0.29$ to $0.49$ on NoXi, $0.36$ to $0.95$ on NoXi+J) instead of $\tau_\infty = 0.1$, without retraining, changes the validation CCC by $-0.001$ on NoXi ($0.729 \pm 0.022$; paired $t$-test over the same models, $p = 0.15$) and by $+0.005$ on NoXi+J ($0.645 \pm 0.017$; $p = 0.03$, all six seeds improve). The effect is real on NoXi+J but an order of magnitude smaller than the gap to the fixed orders.
 
 	\textbf{Corrected layer.} With all four corrections (position queries, scaled scores, $n_{\text{iter}} = 50$, unsorting before the heads, inference at the selected temperature), trained with the same configuration and seeds ($95$, $1$, $2$):
 	
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Corrected ordering layer. Validation CCC (mean over seeds; higher is better) of each configuration the corrected layer is compared with (\emph{Other}), the difference corrected minus other, and the Welch $p$-value. Three seeds for the corrected layer.}
 	\small
 	\begin{tabular}{lcccccc}
 		\toprule
@@ -865,7 +879,7 @@
 		All fixed (12 runs) & $0.712$ & $+0.005$ & $0.68$ & $0.666$ & $-0.023$ & $0.29$ \\
 		First learned layer (6 seeds) & $0.729$ & $-0.013$ & $0.39$ & $0.645$ & $-0.003$ & $0.88$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 	{\footnotesize The corrected layer scores $0.717 \pm 0.017$ on NoXi and $0.642 \pm 0.029$ on NoXi+J. $\Delta$ is the corrected layer minus the other configuration; $p$ from Welch's test. The first learned layer is scored at the selected temperature.}
 
@@ -883,7 +897,8 @@
 
 	\emph{Training-time order.} We trained three more seeds ($3$, $4$, $5$) for each fixed order on both corpora, six per order in all. Each order is compared by Welch's TOST with the runs of the other three orders:
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Equivalence of training-time orders, six seeds per order. Validation CCC (mean $\pm$ sd), $90\%$ confidence interval of the difference to the other three orders, and TOST $p$-value for equivalence within $\pm 0.02$ ($p < 0.05$: equivalent). Last row: one-way ANOVA over the four orders.}
 	\small\setlength{\tabcolsep}{4pt}
 	\begin{tabular}{lcccccc}
 		\toprule
@@ -897,7 +912,7 @@
 		\midrule
 		ANOVA & \multicolumn{3}{c}{$F = 0.47$, $p = 0.71$} & \multicolumn{3}{c}{$F = 0.43$, $p = 0.74$} \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 	{\footnotesize $\Delta$ is the order minus the pooled runs of the other three orders. Bold marks equivalence within $\pm 0.02$ ($p_{\text{TOST}} < 0.05$).}
 
@@ -905,7 +920,8 @@
 
 	\emph{Inference-time order.} Each of the $12$ fixed-order models per corpus (four orders, seeds $95$, $1$, $2$) was run, without retraining, with the scan in six other orders (the three other fixed orders and three further random orders). The outputs are mapped back to the layout the heads were trained on, so only the scan order changes. The difference $\Delta = \text{CCC}(\text{other order}) - \text{CCC}(\text{own order})$ is paired, so seed variance drops out. The unit of analysis is the trained model, with $\Delta$ averaged over its six probes:
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Equivalence of inference-time orders. Each of the $12$ fixed-order models is run, without retraining, with the scan in six other orders ($72$ probes). $\Delta$: validation CCC in the other order minus that in the trained order ($0$: the order does not matter); TOST margin $\pm 0.02$. \emph{Excluded beyond}: the largest absolute bound of the $90\%$ CI.}
 	\small
 	\begin{tabular}{lcc}
 		\toprule
@@ -918,7 +934,7 @@
 		Mean $|\Delta|$ over the $72$ probes & $0.006$ & $0.009$ \\
 		Worst single probe & $-0.022$ & $-0.044$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 
 	Equivalence within $\pm 0.02$ holds clearly on both corpora; on NoXi the data exclude any effect larger than $0.004$. On NoXi+J the models score slightly lower in an order they were not trained with ($-0.007$; $t$-test against zero $p = 0.03$, $10$ of $12$ models lower): the block has adapted a little to its training order, but a foreign order costs less than $0.013$ on average and at most $0.044$ for a single probe.
@@ -930,7 +946,8 @@
 	\subsection{Cross-Corpus Transfer: a Shift in Label Scale}
 	The analyses of this and the next subsection were made with models trained on single-session batches and core features (Sections \ref{sec:batches} and \ref{sec:features}); we have not repeated them in the final setting, but nothing in them depends on those choices. A model trained on one corpus and evaluated on the other scores close to zero. The decomposition $\text{CCC} = \rho\,C_b$ of Section \ref{sec:ccc} shows where the loss arises:
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Cross-corpus transfer. Validation CCC (higher is better), its decomposition into the correlation $\rho$ and the bias correction $C_b$ (both at most $1$; $\text{CCC} = \rho\,C_b$), and the mean prediction $\hat{y}$ and mean label $y$. Single-session batches, core features.}
 	\begin{tabular}{llccccc}
 		\toprule
 		\textbf{Trained on} & \textbf{Evaluated on} & \textbf{CCC} & $\rho$ & $C_b$ & \textbf{mean} $\hat{y}$ & \textbf{mean} $y$ \\
@@ -940,7 +957,7 @@
 		NoXi+J & NoXi+J & $0.530$ & $0.530$ & $\mathbf{0.999}$ & $0.838$ & $0.834$ \\
 		NoXi+J$^{\dagger}$ & NoXi & $0.143$ & $0.445$ & $0.321$ & $0.815$ & $0.570$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 	{\footnotesize $^{\dagger}$ An earlier NoXi+J model, trained with learning rate $5 \times 10^{-4}$.}
 
@@ -952,7 +969,8 @@
 	\label{sec:ttaresults}
 	Test-time adaptation was evaluated with the implementation of Section \ref{sec:tta}, in the cross-corpus setting it was designed for (NoXi model on NoXi+J) and in-corpus (NoXi+J model on NoXi+J).
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Test-time adaptation on whole sessions, across corpora (trained on NoXi, evaluated on NoXi+J) and within NoXi+J. Fraction of windows selected by the filter and validation CCC (higher is better) for each setting of the quantiles $(q_m, q_u)$ and the learning rate $\eta_{\text{TTA}}$.}
 	\begin{tabular}{lcccc}
 		\toprule
 		& \multicolumn{2}{c}{\textbf{NoXi $\to$ NoXi+J}} & \multicolumn{2}{c}{\textbf{NoXi+J $\to$ NoXi+J}} \\
@@ -964,7 +982,7 @@
 		$(0.5,\ 0.5,\ 10^{-3})$ & $14.7\%$ & $\mathbf{0.0953}$ & $18.4\%$ & $0.4178$ \\
 		$(0.3,\ 0.7,\ 10^{-3})$ & $4.5\%$ & $0.0897$ & $5.5\%$ & $0.4796$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 	{\footnotesize $^{\ddagger}$ Estimated from the first three sessions; the fraction was not logged for the full run. Bold marks the best CCC in each column.}
 
@@ -972,7 +990,8 @@
 
 	\textbf{Adaptation on a single person.} In the runs above, the stream being adapted to is a whole session, and the sessions of a split come from many participants, so the shift the adaptation meets mixes differences between persons with the label scale of the corpus, which an adaptation without labels cannot observe. We therefore also ran it on one participant at a time: for each session and each role, the adaptation starts again from the trained model, only that person's multimodal and unimodal uncertainties enter the filter, only that person's heads provide the loss, and only that person's predictions are kept. Both variants were run in-corpus on the best models of Section \ref{sec:longwindows} ($10$ s windows with batches of $4$ on NoXi, $60$ s windows on NoXi+J), three seeds each, and compared with the same seeds without adaptation; ``improved'' counts the $20$ people of each validation split whose own CCC, averaged over the seeds, rises.
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Test-time adaptation on a single person and on a whole session. Change of the validation CCC caused by the adaptation (positive is better), mean over three seeds, and the number of the $20$ validation people whose own CCC rises. Best configurations of Section \ref{sec:longwindows}.}
 	\small
 	\begin{tabular}{lcccc}
 		\toprule
@@ -983,7 +1002,7 @@
 		Person, $(0.3,\ 0.7,\ 10^{-4})$ & $-0.002$ & $11/20$ & $-0.001$ & $6/20$ \\
 		Person, $(0.5,\ 0.5,\ 10^{-3})$ & $-0.022$ & $8/20$ & $-0.208$ & $3/20$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 	{\footnotesize $\Delta$ CCC: change of the pooled CCC, mean over the three seeds (unadapted: $0.744$ on NoXi, $0.736$ on NoXi+J).}
 
@@ -991,7 +1010,8 @@
 
 	\textbf{Total uncertainty from MC dropout.} We then trained the same two configurations with dropout $p = 0.2$ in the Beta heads (Section \ref{sec:uncertainty}), three seeds each, and made three comparisons on the same seeds: the dropout model with a single deterministic pass against the model without dropout; the mean of $T = 10$ passes against that single pass; and adaptation on a single person with the total-variance filter $U_{\text{total}}$ (method 3, design setting $(0.3, 0.7, 10^{-4})$) against the mean of $T = 10$ passes without adaptation.
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{MC dropout. Change of the validation CCC (positive is better) in three comparisons on the same three seeds, and how many seeds (first row) or how many of the $20$ validation people (other rows) improve.}
 	\small
 	\begin{tabular}{lcccc}
 		\toprule
@@ -1002,7 +1022,7 @@
 		Mean of $10$ passes vs.\ single pass & $-0.000$ & $6/20$ & $-0.001$ & $9/20$ \\
 		Person, $U_{\text{total}}$ filter vs.\ mean of $10$ passes & $-0.002$ & $14/20$ & $-0.000$ & $7/20$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 	{\footnotesize $\Delta$ CCC: change of the pooled CCC, mean over the three seeds. With dropout: $0.751 \pm 0.004$ on NoXi and $0.698 \pm 0.026$ on NoXi+J; without: $0.744 \pm 0.008$ and $0.736 \pm 0.013$.}
 
@@ -1015,7 +1035,8 @@
 	$$\hat{y}'_t = \mu_{\text{ens}} + \bigl(\hat{y}_t - \mu_{\text{ens}}\bigr)\,\frac{\bar{\sigma}_{\text{mem}}}{\sigma_{\text{ens}}}.$$
 	Here $\hat{y}_t$ is the ensemble prediction (the frame-wise average of the members), and $\mu_{\text{ens}}$ and $\sigma_{\text{ens}}$ are the mean and standard deviation of this averaged curve over all frames of the split. $\bar{\sigma}_{\text{mem}}$ is computed the other way round: first the standard deviation of each member's own curve, then the average of these six numbers. The two orders of operation give different results for the spread - the spread of an average is smaller than the average spread, unless all members agree perfectly - and that difference is exactly what the stretch undoes; on NoXi+J the factor is $0.086 / 0.078 \approx 1.10$. For the level, both orders give the same number, since the mean of the averaged curve equals the average of the members' means, so the mean is left where it is. The result is clipped to $[0,1]$. Only predictions enter this transformation, never annotations, so it applies unchanged to the test split. Being affine, it leaves $\rho$ untouched and can only move $C_b$.
 
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Ensembling, final configuration. Validation CCC (higher is better) of single models and of the frame-wise mean of six seeds, before and after label-free rescaling, with the correlation $\rho$ and the bias correction $C_b$ ($\text{CCC} = \rho\,C_b$).}
 	\begin{tabular}{lcccccc}
 		\toprule
 		& \multicolumn{3}{c}{\textbf{NoXi}} & \multicolumn{3}{c}{\textbf{NoXi+J}} \\
@@ -1025,13 +1046,14 @@
 		Ensemble of 6 seeds & $0.756$ & $\mathbf{0.761}$ & $0.993$ & $0.696$ & $\mathbf{0.744}$ & $0.936$ \\
 		Ensemble of 6 seeds, rescaled & $\mathbf{0.758}$ & $\mathbf{0.761}$ & $\mathbf{0.996}$ & $\mathbf{0.714}$ & $\mathbf{0.744}$ & $\mathbf{0.959}$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 
 	Ensembling raises the correlation itself, which is precisely the factor that the correlation ceiling of Section \ref{sec:ccc} identifies as the only remaining margin; the rescaling then recovers part of the accuracy lost to averaging. On NoXi+J a gap in $C_b$ remains, almost entirely from the level: the ensemble predicts $0.812$ on average against $0.834$ in the annotations. Two caveats apply: the decision to rescale was made on the validation split, so the final numbers are slightly optimistic; and an ensemble is a statement about the best system we can build, not about the method. We therefore report the single-model mean over seeds as the estimate of the method and the rescaled six-seed ensemble as the system that produces the test predictions.
 
 	\subsection{Summary}
-	\begin{center}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Summary. Validation CCC (higher is better) of single models (mean over seeds) as each change is added, of the two rescaled six-seed ensembles that produce our test predictions, and, for reference, the test-split CCC of the official baseline and the best entry of the MultiMediate'26 leaderboard.}
 	\begin{tabular}{lcc}
 		\toprule
 		\textbf{Validation CCC} & \textbf{NoXi} & \textbf{NoXi+J} \\
@@ -1048,7 +1070,7 @@
 		Official baseline & $0.55$ & $0.31$ \\
 		Best entry & $0.82$ & $0.66$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 	Our numbers are on the validation split and the leaderboard's on the test split, so the comparison is indicative only. The test predictions of each system (NoXi test-base and test-additional, NoXi+J test) are produced by the corresponding rescaled six-seed ensemble.
 
@@ -1059,8 +1081,9 @@
 	
 	The following values define the reference configuration. All are exposed as command-line overrides.
 	
-	\begin{center}
-	\begin{tabular}{llr}
+	\begin{center}\begin{minipage}{\linewidth}\centering
+	\captionof{table}{Hyperparameters of the final configuration (core features plus text, mixed batches, $10$ s windows). The current system adds the temporal block after fusion (Section \ref{sec:fusiontemporal}) and uses batches of $4$ on NoXi, and on NoXi+J $60$ s windows ($1500$ frames, hop $750$), batches of $4$ and at most $100$ epochs (Section \ref{sec:longwindows}).}
+	\begin{tabular}{lp{0.6\textwidth}r}
 		\toprule
 		\textbf{Symbol} & \textbf{Description} & \textbf{Value} \\
 		\midrule
@@ -1085,7 +1108,7 @@
 		\midrule
 		\multicolumn{3}{l}{\textit{Gumbel-Sinkhorn}} \\
 		$d_s$ & Query/key projection dimension & $64$ \\
-		$n_{\text{iter}}$ & Sinkhorn normalisation iterations & $10$; $50$ in the corrected layer (Section \ref{sec:fixedorder}) \\
+		$n_{\text{iter}}$ & Sinkhorn normalisation iterations ($50$ in the corrected layer, Section \ref{sec:fixedorder}) & $10$ \\
 		$\tau_0$ & Initial temperature & $1.0$ \\
 		$\tau_\infty$ & Minimum temperature & $0.1$ \\
 		$\gamma$ & Temperature decay rate per epoch & $0.95$ \\
@@ -1112,7 +1135,7 @@
 		\multicolumn{3}{l}{\textit{Evaluation}} \\
 		$n_b$ & Ground-truth bins for CDD estimation & $10$ \\
 		\bottomrule
-	\end{tabular}
+	\end{tabular}\end{minipage}
 	\end{center}
 	
 	The learning rate was lowered from the initial $10^{-3}$: at that rate a full run reached its best validation CCC at epoch $2$ and then stalled while the training loss kept falling, the signature of steps that are too large once input standardisation lets gradients propagate properly. All results in Section \ref{sec:results} use $\eta = 2 \times 10^{-4}$ and patience $15$.
